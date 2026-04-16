@@ -197,11 +197,25 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 if (converter == null) { ctx.Logger.Warn($"No converter for '{childNode.Type}': {childNode.Name}"); continue; }
 
                 // Figma mask pattern: isMask node → mask shape, subsequent siblings → masked content
-                // In Unity: mask node gets Mask component, siblings become children of mask node
                 bool isMaskNode = childNode.IsMask;
-                var targetParent = (currentMaskGo != null && !isMaskNode) ? currentMaskGo : parentGo;
 
-                var childGo = converter.Convert(childNode, targetParent, ctx);
+                // Don't redirect to mask if the mask GO was destroyed or is null
+                GameObject targetParent;
+                if (currentMaskGo != null && !isMaskNode && currentMaskGo)
+                    targetParent = currentMaskGo;
+                else
+                    targetParent = parentGo;
+
+                GameObject childGo;
+                try
+                {
+                    childGo = converter.Convert(childNode, targetParent, ctx);
+                }
+                catch (System.Exception e)
+                {
+                    ctx.Logger.Error($"Convert failed for '{childNode.Name}': {e.Message}");
+                    continue;
+                }
                 if (childGo == null) continue;
 
                 // If this is a mask node, apply Unity Mask and redirect future siblings
@@ -211,24 +225,24 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     if (maskImage == null)
                     {
                         maskImage = childGo.AddComponent<UnityEngine.UI.Image>();
-                        // Use rasterized sprite if available, else white
                         if (ctx.NodeSprites.TryGetValue(childNode.Id, out var maskSprite))
                             maskImage.sprite = maskSprite;
                         else
                             maskImage.color = UnityEngine.Color.white;
                     }
-                    childGo.AddComponent<UnityEngine.UI.Mask>().showMaskGraphic = true;
+                    if (childGo.GetComponent<UnityEngine.UI.Mask>() == null)
+                        childGo.AddComponent<UnityEngine.UI.Mask>().showMaskGraphic = true;
                     currentMaskGo = childGo;
-                    ctx.Logger.Info($"{childNode.Name}: mask node → Unity Mask component");
                 }
 
                 var rt = childGo.GetComponent<RectTransform>();
                 if (rt == null) continue;
 
-                // When child is placed under a mask, compute position relative to the mask node
+                // Position relative to the logical Figma parent (mask node if redirected)
                 FigmaNode posParentNode = parentNode;
-                if (currentMaskGo != null && !isMaskNode && targetParent == currentMaskGo)
+                if (targetParent == currentMaskGo && currentMaskGo != parentGo)
                 {
+                    // Find the Figma node that corresponds to the mask GO
                     var maskRef = currentMaskGo.GetComponent<Runtime.FigmaNodeRef>();
                     if (maskRef != null && !string.IsNullOrEmpty(maskRef.FigmaNodeId))
                     {

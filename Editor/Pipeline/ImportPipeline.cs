@@ -517,47 +517,65 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 ? new NineSliceDetector(_logger, profile.ImageScale)
                 : null;
 
-            // Import rasterized node images
+            // Step 1: Copy all files to Assets folder (fast, no import triggered)
+            var nodeIdToAssetPath = new Dictionary<string, string>();
+            var fillRefToAssetPath = new Dictionary<string, string>();
+            var allAssetPaths = new List<string>();
+
             foreach (var kv in ctx.NodeImagePaths)
             {
-                var nodeId = kv.Key;
-                var tempPath = kv.Value;
-                var safeName = nodeId.Replace(":", "_");
+                var safeName = kv.Key.Replace(":", "_");
                 var assetPath = Path.Combine(imageDir, $"{safeName}.png");
+                ImageImporter.CopyToAssets(kv.Value, assetPath);
+                nodeIdToAssetPath[kv.Key] = assetPath;
+                allAssetPaths.Add(assetPath);
+            }
 
-                var sprite = ImageImporter.ImportAsSprite(tempPath, assetPath, profile.ImageScale);
-                if (sprite != null)
+            foreach (var kv in ctx.FillImagePaths)
+            {
+                var safeName = kv.Key.Replace(":", "_").Replace("/", "_");
+                var assetPath = Path.Combine(imageDir, $"fill_{safeName}.png");
+                ImageImporter.CopyToAssets(kv.Value, assetPath);
+                fillRefToAssetPath[kv.Key] = assetPath;
+                allAssetPaths.Add(assetPath);
+            }
+
+            if (allAssetPaths.Count == 0)
+                return;
+
+            // Step 2: Batch import all at once (one asset pipeline pass)
+            _logger.Info($"Batch importing {allAssetPaths.Count} images...");
+            var spritesByPath = ImageImporter.BatchImport(allAssetPaths, profile.ImageScale);
+
+            // Step 3: Map sprites back to node IDs / fill refs
+            foreach (var kv in nodeIdToAssetPath)
+            {
+                if (spritesByPath.TryGetValue(kv.Value, out var sprite))
                 {
-                    ctx.NodeSprites[nodeId] = sprite;
+                    ctx.NodeSprites[kv.Key] = sprite;
 
                     // Apply 9-slice if applicable
-                    if (nineSliceDetector != null && ctx.NodeIndex.TryGetValue(nodeId, out var node))
+                    if (nineSliceDetector != null && ctx.NodeIndex.TryGetValue(kv.Key, out var node))
                     {
                         var borders = nineSliceDetector.DetectBorders(node);
                         if (borders != Vector4.zero)
                         {
-                            ImageImporter.SetSliceBorders(assetPath, borders);
-                            // Reload sprite after border change
-                            sprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
+                            ImageImporter.SetSliceBorders(kv.Value, borders);
+                            sprite = AssetDatabase.LoadAssetAtPath<Sprite>(kv.Value);
                             if (sprite != null)
-                                ctx.NodeSprites[nodeId] = sprite;
+                                ctx.NodeSprites[kv.Key] = sprite;
                         }
                     }
                 }
             }
 
-            // Import fill images
-            foreach (var kv in ctx.FillImagePaths)
+            foreach (var kv in fillRefToAssetPath)
             {
-                var imageRef = kv.Key;
-                var tempPath = kv.Value;
-                var safeName = imageRef.Replace(":", "_").Replace("/", "_");
-                var assetPath = Path.Combine(imageDir, $"fill_{safeName}.png");
-
-                var sprite = ImageImporter.ImportAsSprite(tempPath, assetPath, profile.ImageScale);
-                if (sprite != null)
-                    ctx.FillSprites[imageRef] = sprite;
+                if (spritesByPath.TryGetValue(kv.Value, out var sprite))
+                    ctx.FillSprites[kv.Key] = sprite;
             }
+
+            _logger.Success($"Imported {spritesByPath.Count} sprites.");
         }
 
         private static bool IsEmptyGroup(FigmaNode node)

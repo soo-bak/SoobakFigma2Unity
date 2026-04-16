@@ -335,6 +335,9 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     if (purpose != NodePurposeDetector.DetectedPurpose.None)
                         PurposeApplier.Apply(childGo, childNode, purpose, ctx);
                 }
+
+                // Apply prototype interaction hints
+                InteractionMapper.Apply(childGo, childNode, ctx);
             }
         }
 

@@ -18,10 +18,26 @@ namespace SoobakFigma2Unity.Editor.Assets
         /// </summary>
         public static void CopyToAssets(string absolutePath, string assetPath)
         {
+            // Ensure directory exists on disk
             var fullAssetPath = Path.GetFullPath(assetPath);
             var dir = Path.GetDirectoryName(fullAssetPath);
             if (!Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
+
+            // Ensure directory is registered in AssetDatabase
+            var assetDir = Path.GetDirectoryName(assetPath)?.Replace("\\", "/");
+            if (!string.IsNullOrEmpty(assetDir) && !AssetDatabase.IsValidFolder(assetDir))
+            {
+                var parts = assetDir.Split('/');
+                var current = parts[0];
+                for (int i = 1; i < parts.Length; i++)
+                {
+                    var next = current + "/" + parts[i];
+                    if (!AssetDatabase.IsValidFolder(next))
+                        AssetDatabase.CreateFolder(current, parts[i]);
+                    current = next;
+                }
+            }
 
             if (Path.GetFullPath(absolutePath) != fullAssetPath)
                 File.Copy(absolutePath, fullAssetPath, true);

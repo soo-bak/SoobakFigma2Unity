@@ -4,19 +4,11 @@ using UnityEngine;
 
 namespace SoobakFigma2Unity.Editor.Prefabs
 {
-    /// <summary>
-    /// Creates and saves prefabs from generated GameObjects.
-    /// </summary>
     internal static class PrefabBuilder
     {
-        /// <summary>
-        /// Save a root GameObject as a prefab asset.
-        /// Returns the path to the saved prefab.
-        /// </summary>
         public static string SaveAsPrefab(GameObject root, string outputDir, string prefabName = null)
         {
-            if (!Directory.Exists(outputDir))
-                Directory.CreateDirectory(outputDir);
+            EnsureDirectoryExists(outputDir);
 
             var name = SanitizeName(prefabName ?? root.name);
             var path = Path.Combine(outputDir, $"{name}.prefab");
@@ -26,37 +18,49 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             return path;
         }
 
-        /// <summary>
-        /// Save a root GameObject as a prefab, replacing an existing prefab if it exists.
-        /// </summary>
         public static string SaveOrReplacePrefab(GameObject root, string outputDir, string prefabName = null)
         {
-            if (!Directory.Exists(outputDir))
-                Directory.CreateDirectory(outputDir);
+            EnsureDirectoryExists(outputDir);
 
             var name = SanitizeName(prefabName ?? root.name);
             var path = Path.Combine(outputDir, $"{name}.prefab");
 
-            if (File.Exists(path))
-            {
-                // Replace existing prefab
-                var existingPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
-                if (existingPrefab != null)
-                {
-                    PrefabUtility.SaveAsPrefabAsset(root, path);
-                    return path;
-                }
-            }
-
             PrefabUtility.SaveAsPrefabAsset(root, path);
             return path;
+        }
+
+        /// <summary>
+        /// Create the directory on disk AND register it with AssetDatabase
+        /// so Unity recognizes it for asset operations.
+        /// </summary>
+        private static void EnsureDirectoryExists(string assetPath)
+        {
+            // Convert relative asset path to absolute
+            var fullPath = Path.GetFullPath(assetPath);
+
+            if (!Directory.Exists(fullPath))
+                Directory.CreateDirectory(fullPath);
+
+            // Make sure AssetDatabase knows about it by creating folders via API
+            if (!AssetDatabase.IsValidFolder(assetPath))
+            {
+                // Build folder hierarchy: "Assets/UI/Screens" → create "UI" under "Assets", then "Screens" under "Assets/UI"
+                var parts = assetPath.Replace("\\", "/").Split('/');
+                var current = parts[0]; // "Assets"
+                for (int i = 1; i < parts.Length; i++)
+                {
+                    var next = current + "/" + parts[i];
+                    if (!AssetDatabase.IsValidFolder(next))
+                        AssetDatabase.CreateFolder(current, parts[i]);
+                    current = next;
+                }
+            }
         }
 
         private static string SanitizeName(string name)
         {
             foreach (var c in Path.GetInvalidFileNameChars())
                 name = name.Replace(c, '_');
-            // Remove leading/trailing whitespace and dots
             name = name.Trim().Trim('.');
             if (string.IsNullOrEmpty(name))
                 name = "Unnamed";

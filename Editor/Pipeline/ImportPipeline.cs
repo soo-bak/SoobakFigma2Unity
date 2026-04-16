@@ -326,6 +326,15 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 // Recurse into children
                 if (childNode.HasChildren && childNode.NodeType != FigmaNodeType.TEXT)
                     ConvertChildren(childNode, childGo, ctx, profile);
+
+                // Auto-detect UI purpose (Button, InputField, ScrollView, etc.)
+                if (childNode.NodeType != FigmaNodeType.TEXT)
+                {
+                    var detector = new NodePurposeDetector(ctx.Logger, ctx.Components);
+                    var purpose = detector.Detect(childNode);
+                    if (purpose != NodePurposeDetector.DetectedPurpose.None)
+                        PurposeApplier.Apply(childGo, childNode, purpose, ctx);
+                }
             }
         }
 

@@ -118,18 +118,13 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (profile.Mode != ImportMode.ScreenOnly)
                 GenerateComponentPrefabs(frames, ctx, profile);
 
-            AssetDatabase.StartAssetEditing();
-            try
+            if (profile.Mode != ImportMode.ComponentsOnly)
             {
-                if (profile.Mode != ImportMode.ComponentsOnly)
-                    foreach (var frame in frames)
-                        ConvertAndSaveFrame(frame, ctx, profile);
+                foreach (var frame in frames)
+                    ConvertAndSaveFrame(frame, ctx, profile);
             }
-            finally
-            {
-                AssetDatabase.StopAssetEditing();
-                AssetDatabase.Refresh();
-            }
+
+            AssetDatabase.Refresh();
         }
 
         private void SaveSnapshot(List<FigmaNode> frames, string fileKey, string lastModified, ImportProfile profile)

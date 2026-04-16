@@ -38,7 +38,9 @@ namespace SoobakFigma2Unity.Editor.Converters
             else if (ctx.NodeSprites.TryGetValue(node.Id, out var sprite))
             {
                 image.sprite = sprite;
-                image.type = Image.Type.Simple;
+                image.type = (sprite.border != UnityEngine.Vector4.zero)
+                    ? Image.Type.Sliced
+                    : Image.Type.Simple;
                 image.color = UnityEngine.Color.white;
             }
             else if (node.Fills != null)

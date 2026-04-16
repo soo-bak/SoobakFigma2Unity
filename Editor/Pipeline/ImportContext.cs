@@ -47,5 +47,24 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
         /// <summary>All image fill refs that need downloading.</summary>
         public HashSet<string> ImageFillRefs { get; set; } = new HashSet<string>();
+
+        /// <summary>Index of all nodes by ID (for lookups during image import).</summary>
+        public Dictionary<string, FigmaNode> NodeIndex { get; set; } = new Dictionary<string, FigmaNode>();
+
+        /// <summary>Build the node index from a list of root frames.</summary>
+        public void BuildNodeIndex(IEnumerable<FigmaNode> roots)
+        {
+            foreach (var root in roots)
+                IndexNode(root);
+        }
+
+        private void IndexNode(FigmaNode node)
+        {
+            if (node == null) return;
+            NodeIndex[node.Id] = node;
+            if (node.Children != null)
+                foreach (var child in node.Children)
+                    IndexNode(child);
+        }
     }
 }

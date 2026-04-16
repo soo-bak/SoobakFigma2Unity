@@ -81,7 +81,8 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
                 _logger.Success($"Fetched {framesToConvert.Count} frame(s).");
 
-                // Step 2: Collect nodes needing rasterization and image fill refs
+                // Step 2: Build node index and collect image requirements
+                ctx.BuildNodeIndex(framesToConvert);
                 foreach (var frame in framesToConvert)
                     CollectImageRequirements(frame, ctx);
 
@@ -444,6 +445,9 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         private void ImportAllImages(ImportContext ctx, ImportProfile profile)
         {
             var imageDir = profile.ImageOutputPath;
+            var nineSliceDetector = profile.AutoNineSlice
+                ? new NineSliceDetector(_logger, profile.ImageScale)
+                : null;
 
             // Import rasterized node images
             foreach (var kv in ctx.NodeImagePaths)
@@ -455,7 +459,23 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
                 var sprite = ImageImporter.ImportAsSprite(tempPath, assetPath, profile.ImageScale);
                 if (sprite != null)
+                {
                     ctx.NodeSprites[nodeId] = sprite;
+
+                    // Apply 9-slice if applicable
+                    if (nineSliceDetector != null && ctx.NodeIndex.TryGetValue(nodeId, out var node))
+                    {
+                        var borders = nineSliceDetector.DetectBorders(node);
+                        if (borders != Vector4.zero)
+                        {
+                            ImageImporter.SetSliceBorders(assetPath, borders);
+                            // Reload sprite after border change
+                            sprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
+                            if (sprite != null)
+                                ctx.NodeSprites[nodeId] = sprite;
+                        }
+                    }
+                }
             }
 
             // Import fill images

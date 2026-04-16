@@ -92,7 +92,10 @@ namespace SoobakFigma2Unity.Editor.Converters
             {
                 var image = go.AddComponent<Image>();
                 image.sprite = sprite;
-                image.type = Image.Type.Simple;
+                // Use Sliced if sprite has borders (9-slice)
+                image.type = (sprite.border != UnityEngine.Vector4.zero)
+                    ? Image.Type.Sliced
+                    : Image.Type.Simple;
                 image.preserveAspect = false;
                 return;
             }

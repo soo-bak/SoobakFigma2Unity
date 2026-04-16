@@ -1,0 +1,142 @@
+using SoobakFigma2Unity.Editor.Models;
+using SoobakFigma2Unity.Editor.Util;
+using UnityEngine;
+
+namespace SoobakFigma2Unity.Editor.Assets
+{
+    /// <summary>
+    /// Detects 9-slice candidates from Figma node properties and
+    /// calculates appropriate sprite border values.
+    ///
+    /// Detection heuristics:
+    /// 1. Node has cornerRadius > 0 → border = cornerRadius * scale
+    /// 2. Node has uniform rectangleCornerRadii → symmetric borders
+    /// 3. Node has non-uniform rectangleCornerRadii → per-corner borders
+    /// 4. Node is used as a component instance at multiple sizes → strong 9-slice candidate
+    /// </summary>
+    internal sealed class NineSliceDetector
+    {
+        private readonly ImportLogger _logger;
+        private readonly float _imageScale;
+
+        public NineSliceDetector(ImportLogger logger, float imageScale)
+        {
+            _logger = logger;
+            _imageScale = imageScale;
+        }
+
+        /// <summary>
+        /// Check if this node is a 9-slice candidate and return border values if so.
+        /// Returns Vector4(left, bottom, right, top) in pixel coordinates of the exported image.
+        /// Returns Vector4.zero if not a 9-slice candidate.
+        /// </summary>
+        public Vector4 DetectBorders(FigmaNode node)
+        {
+            if (!IsCandidate(node))
+                return Vector4.zero;
+
+            // Non-uniform corner radii
+            if (node.RectangleCornerRadii != null && node.RectangleCornerRadii.Length == 4)
+            {
+                return CalculateNonUniformBorders(node);
+            }
+
+            // Uniform corner radius
+            if (node.CornerRadius > 0)
+            {
+                return CalculateUniformBorders(node);
+            }
+
+            return Vector4.zero;
+        }
+
+        /// <summary>
+        /// Check if a node is a 9-slice candidate.
+        /// </summary>
+        public bool IsCandidate(FigmaNode node)
+        {
+            // Must have corner radius
+            if (node.CornerRadius <= 0 &&
+                (node.RectangleCornerRadii == null || node.RectangleCornerRadii.Length < 4))
+                return false;
+
+            // Must have fills (otherwise no image to slice)
+            if (!node.HasVisibleFills)
+                return false;
+
+            // Skip very small nodes (icons, etc.)
+            if (node.Width < 16 || node.Height < 16)
+                return false;
+
+            // Node type should be FRAME or RECTANGLE (not vectors or text)
+            var t = node.NodeType;
+            if (t != FigmaNodeType.FRAME && t != FigmaNodeType.RECTANGLE &&
+                t != FigmaNodeType.COMPONENT && t != FigmaNodeType.INSTANCE)
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Calculate borders from uniform corner radius.
+        /// Border size = cornerRadius + small padding to include the full curve.
+        /// </summary>
+        private Vector4 CalculateUniformBorders(FigmaNode node)
+        {
+            float radius = node.CornerRadius;
+
+            // Scale the radius to match exported image resolution
+            float border = Mathf.CeilToInt(radius * _imageScale);
+
+            // Ensure border doesn't exceed half the image dimension
+            float maxH = Mathf.Floor(node.Width * _imageScale / 2f);
+            float maxV = Mathf.Floor(node.Height * _imageScale / 2f);
+            border = Mathf.Min(border, Mathf.Min(maxH, maxV));
+
+            if (border <= 0)
+                return Vector4.zero;
+
+            _logger.Info($"{node.Name}: 9-slice detected (uniform r={radius}px, border={border}px)");
+
+            // Vector4(left, bottom, right, top)
+            return new Vector4(border, border, border, border);
+        }
+
+        /// <summary>
+        /// Calculate borders from non-uniform corner radii.
+        /// RectangleCornerRadii = [topLeft, topRight, bottomRight, bottomLeft]
+        /// </summary>
+        private Vector4 CalculateNonUniformBorders(FigmaNode node)
+        {
+            var radii = node.RectangleCornerRadii;
+            float topLeft = radii[0];
+            float topRight = radii[1];
+            float bottomRight = radii[2];
+            float bottomLeft = radii[3];
+
+            // Left border = max of topLeft, bottomLeft
+            float left = Mathf.Max(topLeft, bottomLeft) * _imageScale;
+            // Right border = max of topRight, bottomRight
+            float right = Mathf.Max(topRight, bottomRight) * _imageScale;
+            // Top border = max of topLeft, topRight
+            float top = Mathf.Max(topLeft, topRight) * _imageScale;
+            // Bottom border = max of bottomLeft, bottomRight
+            float bottom = Mathf.Max(bottomLeft, bottomRight) * _imageScale;
+
+            // Clamp to half dimensions
+            float maxH = Mathf.Floor(node.Width * _imageScale / 2f);
+            float maxV = Mathf.Floor(node.Height * _imageScale / 2f);
+            left = Mathf.Min(Mathf.CeilToInt(left), maxH);
+            right = Mathf.Min(Mathf.CeilToInt(right), maxH);
+            top = Mathf.Min(Mathf.CeilToInt(top), maxV);
+            bottom = Mathf.Min(Mathf.CeilToInt(bottom), maxV);
+
+            if (left <= 0 && right <= 0 && top <= 0 && bottom <= 0)
+                return Vector4.zero;
+
+            _logger.Info($"{node.Name}: 9-slice detected (non-uniform, borders L={left} B={bottom} R={right} T={top})");
+
+            return new Vector4(left, bottom, right, top);
+        }
+    }
+}

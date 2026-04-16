@@ -7,6 +7,7 @@ using SoobakFigma2Unity.Editor.Api;
 using SoobakFigma2Unity.Editor.Assets;
 using SoobakFigma2Unity.Editor.Converters;
 using SoobakFigma2Unity.Editor.Layout;
+using SoobakFigma2Unity.Editor.Mapping;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Prefabs;
 using SoobakFigma2Unity.Editor.Settings;
@@ -185,9 +186,29 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (frameNode.HasChildren)
                 ConvertChildren(frameNode, rootGo, ctx, profile);
 
-            // Save as prefab
+            // Save as prefab (with merge if re-importing)
             var outputDir = profile.ScreenOutputPath;
-            var prefabPath = PrefabBuilder.SaveOrReplacePrefab(rootGo, outputDir, frameNode.Name);
+            string prefabPath;
+
+            if (profile.PreserveOnReimport)
+            {
+                var existingPath = MergeStrategy.FindExistingPrefab(frameNode.Id, outputDir);
+                if (existingPath != null)
+                {
+                    var merger = new MergeStrategy(_logger);
+                    prefabPath = merger.MergeIntoPrefab(rootGo, existingPath);
+                    if (prefabPath == null)
+                        prefabPath = PrefabBuilder.SaveOrReplacePrefab(rootGo, outputDir, frameNode.Name);
+                }
+                else
+                {
+                    prefabPath = PrefabBuilder.SaveOrReplacePrefab(rootGo, outputDir, frameNode.Name);
+                }
+            }
+            else
+            {
+                prefabPath = PrefabBuilder.SaveOrReplacePrefab(rootGo, outputDir, frameNode.Name);
+            }
             _logger.Success($"Saved prefab: {prefabPath}");
 
             // Cleanup

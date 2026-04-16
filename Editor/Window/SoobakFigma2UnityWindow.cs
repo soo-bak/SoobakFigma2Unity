@@ -1,5 +1,4 @@
-using System.Threading;
-using SoobakFigma2Unity.Editor.Api;
+using SoobakFigma2Unity.Editor.Import;
 using SoobakFigma2Unity.Editor.Pipeline;
 using SoobakFigma2Unity.Editor.Settings;
 using SoobakFigma2Unity.Editor.Util;
@@ -22,16 +21,16 @@ namespace SoobakFigma2Unity.Editor.Window
         private ImportProfile _profile = new ImportProfile();
         private FrameTreeView _treeView = new FrameTreeView();
         private ImportLogger _logger = new ImportLogger();
-        private CancellationTokenSource _cts;
-        private bool _isFetching;
         private bool _isImporting;
         private Vector2 _mainScroll;
         private Vector2 _logScroll;
+        private string _exportFilePath = "";
+        private SoobakExportFile _loadedExport;
 
         // Scale options
         private static readonly string[] ScaleLabels = { "1x", "2x", "3x", "4x" };
         private static readonly float[] ScaleValues = { 1f, 2f, 3f, 4f };
-        private int _scaleIndex = 1; // default 2x
+        private int _scaleIndex = 1;
 
         // Import mode labels
         private static readonly string[] ModeLabels =
@@ -46,7 +45,6 @@ namespace SoobakFigma2Unity.Editor.Window
 
         private void OnEnable()
         {
-            _profile.PersonalAccessToken = SoobakSettings.Token;
             _profile.PrefabOutputPath = SoobakSettings.PrefabPath;
             _profile.ScreenOutputPath = SoobakSettings.ScreenPath;
             _profile.ImageOutputPath = SoobakSettings.ImagePath;
@@ -60,15 +58,13 @@ namespace SoobakFigma2Unity.Editor.Window
         private void OnDisable()
         {
             _logger.OnLogUpdated -= Repaint;
-            _cts?.Cancel();
-            _cts?.Dispose();
         }
 
         private void OnGUI()
         {
             _mainScroll = EditorGUILayout.BeginScrollView(_mainScroll);
 
-            DrawConnectionSection();
+            DrawExportFileSection();
             DrawFrameSelectionSection();
             DrawImportModeSection();
             DrawImageSection();
@@ -82,30 +78,45 @@ namespace SoobakFigma2Unity.Editor.Window
             EditorGUILayout.EndScrollView();
         }
 
-        // ─── Connection ─────────────────────────────────
-        private void DrawConnectionSection()
+        // ─── Export File ────────────────────────────────
+        private void DrawExportFileSection()
         {
-            EditorGUILayout.LabelField("Connection", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Export File", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
 
-            _profile.FigmaUrl = EditorGUILayout.TextField("Figma URL", _profile.FigmaUrl);
-
             EditorGUILayout.BeginHorizontal();
-            _profile.PersonalAccessToken = EditorGUILayout.PasswordField("Token", _profile.PersonalAccessToken);
-            if (GUILayout.Button("Save", GUILayout.Width(50)))
+            _exportFilePath = EditorGUILayout.TextField("Path", _exportFilePath);
+            if (GUILayout.Button("Browse", GUILayout.Width(70)))
             {
-                SoobakSettings.Token = _profile.PersonalAccessToken;
-                _logger.Info("Token saved.");
+                var path = EditorUtility.OpenFilePanel(
+                    "Select .soobak.json export file",
+                    "",
+                    "json");
+                if (!string.IsNullOrEmpty(path))
+                {
+                    _exportFilePath = path;
+                    LoadExportFile();
+                }
             }
             EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
-            EditorGUI.BeginDisabledGroup(_isFetching || _isImporting);
-            if (GUILayout.Button("Fetch", GUILayout.Width(80)))
-                FetchFile();
+            EditorGUI.BeginDisabledGroup(_isImporting || string.IsNullOrEmpty(_exportFilePath));
+            if (GUILayout.Button("Load", GUILayout.Width(80)))
+                LoadExportFile();
             EditorGUI.EndDisabledGroup();
             EditorGUILayout.EndHorizontal();
+
+            if (_loadedExport != null)
+            {
+                EditorGUILayout.HelpBox(
+                    $"File: {_loadedExport.Manifest.FileName}\n" +
+                    $"Frames: {_loadedExport.Manifest.Frames?.Count ?? 0}\n" +
+                    $"Images: {_loadedExport.EmbeddedImages?.Count ?? 0}\n" +
+                    $"Scale: {_loadedExport.Manifest.ImageScale}x",
+                    MessageType.Info);
+            }
 
             EditorGUI.indentLevel--;
             EditorGUILayout.Space(8);
@@ -136,12 +147,22 @@ namespace SoobakFigma2Unity.Editor.Window
             EditorGUILayout.LabelField("Image", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
 
+            EditorGUI.BeginDisabledGroup(_loadedExport != null);
             _scaleIndex = EditorGUILayout.Popup("Scale", _scaleIndex, ScaleLabels);
             _profile.ImageScale = ScaleValues[_scaleIndex];
+            EditorGUI.EndDisabledGroup();
+
+            if (_loadedExport != null)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Scale is determined by the export file ({_loadedExport.Manifest.ImageScale}x).",
+                    MessageType.None);
+                _profile.ImageScale = _loadedExport.Manifest.ImageScale;
+            }
 
             _profile.AutoNineSlice = EditorGUILayout.Toggle("Auto 9-slice detection", _profile.AutoNineSlice);
             _profile.SolidColorOptimization = EditorGUILayout.Toggle(
-                new GUIContent("Solid color → no image", "Use Color tint instead of downloading image for solid fills"),
+                new GUIContent("Solid color → no image", "Use Color tint instead of image for solid fills"),
                 _profile.SolidColorOptimization);
 
             EditorGUI.indentLevel--;
@@ -215,7 +236,6 @@ namespace SoobakFigma2Unity.Editor.Window
                 var selected = EditorUtility.OpenFolderPanel(label, currentPath, "");
                 if (!string.IsNullOrEmpty(selected))
                 {
-                    // Convert absolute path to relative Assets path
                     if (selected.StartsWith(Application.dataPath))
                         path = "Assets" + selected.Substring(Application.dataPath.Length);
                     else
@@ -231,22 +251,16 @@ namespace SoobakFigma2Unity.Editor.Window
         {
             EditorGUILayout.Space(4);
 
-            EditorGUI.BeginDisabledGroup(_isFetching || _isImporting);
+            EditorGUI.BeginDisabledGroup(_isImporting || _loadedExport == null);
             var buttonStyle = new GUIStyle(GUI.skin.button)
             {
                 fontStyle = FontStyle.Bold,
                 fixedHeight = 32
             };
 
-            if (GUILayout.Button(_isImporting ? "Importing..." : "Import Selected", buttonStyle))
+            if (GUILayout.Button(_isImporting ? "Importing..." : "Import", buttonStyle))
                 RunImport();
             EditorGUI.EndDisabledGroup();
-
-            if (_isImporting)
-            {
-                if (GUILayout.Button("Cancel"))
-                    _cts?.Cancel();
-            }
 
             EditorGUILayout.Space(8);
         }
@@ -280,92 +294,96 @@ namespace SoobakFigma2Unity.Editor.Window
         }
 
         // ─── Actions ────────────────────────────────────
-        private void FetchFile()
+        private void LoadExportFile()
         {
-            var urlInfo = FigmaUrlParser.Parse(_profile.FigmaUrl);
-            if (!urlInfo.IsValid)
+            if (string.IsNullOrEmpty(_exportFilePath))
             {
-                _logger.Error("Invalid Figma URL. Use: https://www.figma.com/file/FILEKEY/...");
+                _logger.Error("No file path specified.");
                 return;
             }
 
-            if (string.IsNullOrEmpty(_profile.PersonalAccessToken))
+            var loader = new SoobakExportLoader(_logger);
+            _loadedExport = loader.Load(_exportFilePath);
+
+            if (_loadedExport != null)
             {
-                _logger.Error("Please enter a Figma Personal Access Token.");
-                return;
+                // Build frame tree for selection
+                BuildFrameTreeFromExport();
+
+                // Use export scale
+                _profile.ImageScale = _loadedExport.Manifest.ImageScale;
+                _scaleIndex = System.Array.IndexOf(ScaleValues, _profile.ImageScale);
+                if (_scaleIndex < 0) _scaleIndex = 1;
             }
 
-            _isFetching = true;
-            _logger.Info($"Fetching file structure (key: {urlInfo.FileKey})...");
+            Repaint();
+        }
 
-            AsyncHelper.RunAsync(async () =>
+        private void BuildFrameTreeFromExport()
+        {
+            if (_loadedExport?.Manifest?.Frames == null) return;
+
+            // Create a virtual document for the tree view
+            var doc = new Models.FigmaNode
             {
-                using var api = new FigmaApiClient(_profile.PersonalAccessToken);
-                var file = await api.GetFileAsync(urlInfo.FileKey, depth: 2);
-
-                AsyncHelper.RunOnMainThread(() =>
+                Id = "doc",
+                Name = _loadedExport.Manifest.FileName,
+                Type = "DOCUMENT",
+                Children = new System.Collections.Generic.List<Models.FigmaNode>
                 {
-                    _treeView.BuildFromDocument(file.Document);
-                    _logger.Success($"Fetched: {file.Name} ({_treeView.Roots.Count} pages)");
-                    _isFetching = false;
-                    Repaint();
-                });
-            },
-            error =>
+                    new Models.FigmaNode
+                    {
+                        Id = "page",
+                        Name = "Exported Frames",
+                        Type = "CANVAS",
+                        Children = _loadedExport.Manifest.Frames
+                    }
+                }
+            };
+
+            _treeView.BuildFromDocument(doc);
+
+            // Auto-select all frames
+            foreach (var root in _treeView.Roots)
             {
-                _logger.Error($"Fetch failed: {error.Message}");
-                _isFetching = false;
-                Repaint();
-            });
+                root.Selected = true;
+                foreach (var child in root.Children)
+                    child.Selected = true;
+            }
         }
 
         private void RunImport()
         {
-            var urlInfo = FigmaUrlParser.Parse(_profile.FigmaUrl);
-            if (!urlInfo.IsValid)
+            if (_loadedExport == null)
             {
-                _logger.Error("Invalid Figma URL.");
-                return;
-            }
-
-            var selectedIds = _treeView.GetSelectedNodeIds();
-            if (selectedIds.Count == 0)
-            {
-                _logger.Error("No frames selected. Check the frames you want to import.");
+                _logger.Error("No export file loaded. Click Load first.");
                 return;
             }
 
             // Save settings
-            SoobakSettings.Token = _profile.PersonalAccessToken;
             SoobakSettings.PrefabPath = _profile.PrefabOutputPath;
             SoobakSettings.ScreenPath = _profile.ScreenOutputPath;
             SoobakSettings.ImagePath = _profile.ImageOutputPath;
             SoobakSettings.ImageScale = _profile.ImageScale;
 
             _isImporting = true;
-            _cts?.Dispose();
-            _cts = new CancellationTokenSource();
+            _logger.Info("Starting import...");
 
-            _logger.Info($"Starting import of {selectedIds.Count} frame(s)...");
-
-            AsyncHelper.RunAsync(async () =>
+            try
             {
-                using var api = new FigmaApiClient(_profile.PersonalAccessToken);
-                var pipeline = new ImportPipeline(api, _logger);
-                await pipeline.RunAsync(_profile, urlInfo.FileKey, selectedIds, _cts.Token);
-
-                AsyncHelper.RunOnMainThread(() =>
-                {
-                    _isImporting = false;
-                    Repaint();
-                });
-            },
-            error =>
+                var pipeline = new ImportPipeline(_logger);
+                pipeline.RunFromExport(_exportFilePath, _profile);
+            }
+            catch (System.Exception e)
             {
-                _logger.Error($"Import failed: {error.Message}");
+                _logger.Error($"Import failed: {e.Message}");
+                Debug.LogException(e);
+            }
+            finally
+            {
                 _isImporting = false;
                 Repaint();
-            });
+            }
         }
     }
 }

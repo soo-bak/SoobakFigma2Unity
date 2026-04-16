@@ -102,17 +102,23 @@ namespace SoobakFigma2Unity.Editor.Converters
                     return true;
             }
 
-            // Nodes with isMask flag → always rasterize.
-            // This captures the final mask shape including any clipsContent cropping.
-            if (node.IsMask)
-                return true;
-
-            // Nodes with visible image fills → rasterize to capture image rendering
+            // Nodes with visible image fills → rasterize to capture correct crop/stretch
             if (node.Fills != null)
             {
                 foreach (var fill in node.Fills)
                 {
                     if (fill.Visible && fill.IsImage)
+                        return true;
+                }
+            }
+
+            // Nodes containing isMask children → rasterize the whole composition
+            // (e.g., speechbubble with mask shape + emoji content)
+            if (node.Children != null)
+            {
+                foreach (var child in node.Children)
+                {
+                    if (child.IsMask)
                         return true;
                 }
             }

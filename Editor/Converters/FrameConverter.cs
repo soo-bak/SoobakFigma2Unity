@@ -42,39 +42,8 @@ namespace SoobakFigma2Unity.Editor.Converters
             if (image_ != null && !string.IsNullOrEmpty(node.BlendMode))
                 BlendModeHelper.TryApply(image_, node.BlendMode, ctx.Logger);
 
-            // isMask FRAME: this node defines a mask shape.
-            // Use its own rasterized image, or its first vector child's image as the mask.
-            if (node.IsMask)
-            {
-                var image = go.GetComponent<Image>();
-                if (image == null)
-                    image = go.AddComponent<Image>();
-
-                // Try own sprite first
-                if (ctx.NodeSprites.TryGetValue(node.Id, out var ownSprite))
-                {
-                    image.sprite = ownSprite;
-                }
-                else if (node.Children != null)
-                {
-                    // Try first vector child's sprite (the actual mask shape)
-                    foreach (var vc in node.Children)
-                    {
-                        if (ctx.NodeSprites.TryGetValue(vc.Id, out var vecSprite))
-                        {
-                            image.sprite = vecSprite;
-                            break;
-                        }
-                    }
-                }
-
-                if (image.sprite == null)
-                    image.color = UnityEngine.Color.white;
-
-                go.AddComponent<Mask>().showMaskGraphic = image.sprite != null;
-            }
-            // clipsContent (not isMask): just clip overflow
-            else if (node.ClipsContent)
+            // Clips content → Mask (clips children to this frame's bounds)
+            if (node.ClipsContent)
             {
                 var image = go.GetComponent<Image>();
                 if (image == null)

@@ -102,25 +102,10 @@ namespace SoobakFigma2Unity.Editor.Converters
                     return true;
             }
 
-            // Nodes with isMask flag:
-            // If it's a FRAME/GROUP with vector children, don't rasterize the frame
-            // (clipsContent would crop the shape). The child vector will be rasterized instead.
-            // If it's a vector type itself, it's already handled above.
-            // Only rasterize mask frames that have no vector children (rare).
+            // Nodes with isMask flag → always rasterize.
+            // This captures the final mask shape including any clipsContent cropping.
             if (node.IsMask)
-            {
-                bool hasVectorChild = false;
-                if (node.Children != null)
-                    foreach (var c in node.Children)
-                    {
-                        var ct = c.NodeType;
-                        if (ct == FigmaNodeType.VECTOR || ct == FigmaNodeType.ELLIPSE ||
-                            ct == FigmaNodeType.STAR || ct == FigmaNodeType.BOOLEAN_OPERATION)
-                        { hasVectorChild = true; break; }
-                    }
-                if (!hasVectorChild)
-                    return true;
-            }
+                return true;
 
             // Nodes with visible image fills → rasterize to capture image rendering
             if (node.Fills != null)

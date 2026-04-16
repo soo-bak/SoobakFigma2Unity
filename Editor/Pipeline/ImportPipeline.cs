@@ -375,11 +375,22 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         private void CollectImageRequirements(FigmaNode node, ImportContext ctx)
         {
             if (NodeConverterRegistry.ShouldSkip(node)) return;
-            if (NodeConverterRegistry.NeedsRasterization(node)) ctx.NodesToRasterize.Add(node.Id);
-            if (node.Fills != null)
+
+            bool needsRaster = NodeConverterRegistry.NeedsRasterization(node);
+            if (needsRaster)
+            {
+                ctx.NodesToRasterize.Add(node.Id);
+                // Node will be rasterized as a whole — don't also download the raw fill image
+                // (raw fill is the uncropped sprite sheet, rasterization gives the correct crop)
+            }
+            else if (node.Fills != null)
+            {
+                // Only collect fill image refs for nodes that are NOT rasterized
                 foreach (var fill in node.Fills)
                     if (fill.Visible && fill.IsImage && !string.IsNullOrEmpty(fill.ImageRef))
                         ctx.ImageFillRefs.Add(fill.ImageRef);
+            }
+
             if (node.Children != null)
                 foreach (var child in node.Children)
                     CollectImageRequirements(child, ctx);

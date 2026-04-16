@@ -101,8 +101,7 @@ namespace SoobakFigma2Unity.Editor.Window
 
             if (item.Children.Count > 0)
             {
-                item.Expanded = UnityEditor.EditorGUILayout.Foldout(item.Expanded, "", true,
-                    GUILayout.Width(12));
+                item.Expanded = UnityEditor.EditorGUILayout.Foldout(item.Expanded, "", true);
             }
             else
             {

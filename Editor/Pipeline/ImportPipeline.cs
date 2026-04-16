@@ -84,7 +84,6 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 // Step 2: Check for incremental update
                 var snapshot = ImportSnapshot.Load(profile.ScreenOutputPath);
                 HashSet<string> changedNodes = null;
-                bool isIncremental = false;
 
                 if (snapshot != null && snapshot.FileKey == fileKey)
                 {
@@ -111,7 +110,6 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                         return;
                     }
 
-                    isIncremental = true;
                     _logger.Info($"Incremental update: {changedNodes.Count} node(s) changed.");
                 }
 

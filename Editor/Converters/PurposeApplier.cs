@@ -199,7 +199,7 @@ namespace SoobakFigma2Unity.Editor.Converters
                 if (image == null)
                 {
                     image = go.AddComponent<Image>();
-                    image.color = Color.clear;
+                    image.color = UnityEngine.Color.clear;
                 }
                 go.AddComponent<Mask>().showMaskGraphic = false;
             }

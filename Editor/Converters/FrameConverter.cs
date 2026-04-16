@@ -37,6 +37,11 @@ namespace SoobakFigma2Unity.Editor.Converters
             // Apply fills
             ApplyFills(go, node, ctx);
 
+            // Apply blend mode
+            var image_ = go.GetComponent<Image>();
+            if (image_ != null && !string.IsNullOrEmpty(node.BlendMode))
+                BlendModeHelper.TryApply(image_, node.BlendMode, ctx.Logger);
+
             // Clips content → Mask
             if (node.ClipsContent)
             {

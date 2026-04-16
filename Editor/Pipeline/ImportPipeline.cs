@@ -116,14 +116,23 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 _logger.Info("Importing images into Unity...");
                 ImportAllImages(ctx, profile);
 
-                // Step 5: Convert each frame to GameObjects and save as prefabs
+                // Step 5: Generate component prefabs first (so instances can link to them)
+                if (profile.Mode != ImportMode.ScreenOnly)
+                {
+                    GenerateComponentPrefabs(framesToConvert, ctx, profile);
+                }
+
+                // Step 6: Convert each frame to GameObjects and save as prefabs
                 AssetDatabase.StartAssetEditing();
                 try
                 {
-                    foreach (var frame in framesToConvert)
+                    if (profile.Mode != ImportMode.ComponentsOnly)
                     {
-                        ct.ThrowIfCancellationRequested();
-                        ConvertAndSaveFrame(frame, ctx, profile);
+                        foreach (var frame in framesToConvert)
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            ConvertAndSaveFrame(frame, ctx, profile);
+                        }
                     }
                 }
                 finally
@@ -291,6 +300,97 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 var cg = go.AddComponent<CanvasGroup>();
                 cg.alpha = node.Opacity;
             }
+        }
+
+        /// <summary>
+        /// Walk selected frames, find all COMPONENT and COMPONENT_SET nodes,
+        /// and generate prefabs for them before screen conversion.
+        /// </summary>
+        private void GenerateComponentPrefabs(List<FigmaNode> frames, ImportContext ctx, ImportProfile profile)
+        {
+            var components = new List<FigmaNode>();
+            var componentSets = new List<FigmaNode>();
+
+            foreach (var frame in frames)
+                CollectComponents(frame, components, componentSets);
+
+            _logger.Info($"Found {components.Count} components, {componentSets.Count} component sets.");
+
+            // Process component sets first (they generate base + variant prefabs)
+            if (profile.GeneratePrefabVariants)
+            {
+                var variantBuilder = new PrefabVariantBuilder(_logger);
+                foreach (var cs in componentSets)
+                {
+                    variantBuilder.BuildVariantChain(
+                        cs,
+                        node => ConvertNodeToGameObject(node, ctx, profile),
+                        profile.PrefabOutputPath,
+                        ctx
+                    );
+                }
+            }
+
+            // Process standalone components (not part of a component set)
+            foreach (var comp in components)
+            {
+                // Skip if already handled as part of a component set
+                if (ctx.GeneratedPrefabs.ContainsKey(comp.Id))
+                    continue;
+
+                // Check if this component belongs to a component set
+                if (ctx.Components.TryGetValue(comp.Id, out var meta) &&
+                    !string.IsNullOrEmpty(meta.ComponentSetId))
+                    continue;
+
+                var go = ConvertNodeToGameObject(comp, ctx, profile);
+                var path = PrefabBuilder.SaveOrReplacePrefab(go, profile.PrefabOutputPath, comp.Name);
+                ctx.GeneratedPrefabs[comp.Id] = path;
+                _logger.Success($"Component prefab: {path}");
+                Object.DestroyImmediate(go);
+            }
+        }
+
+        private void CollectComponents(FigmaNode node, List<FigmaNode> components, List<FigmaNode> componentSets)
+        {
+            if (node.NodeType == FigmaNodeType.COMPONENT_SET)
+            {
+                componentSets.Add(node);
+                return; // Children are variants, handled by PrefabVariantBuilder
+            }
+
+            if (node.NodeType == FigmaNodeType.COMPONENT)
+                components.Add(node);
+
+            if (node.Children != null)
+            {
+                foreach (var child in node.Children)
+                    CollectComponents(child, components, componentSets);
+            }
+        }
+
+        /// <summary>
+        /// Convert a single Figma node to a standalone GameObject tree (for component prefab generation).
+        /// </summary>
+        private GameObject ConvertNodeToGameObject(FigmaNode node, ImportContext ctx, ImportProfile profile)
+        {
+            var go = new GameObject(node.Name);
+            var rt = go.AddComponent<RectTransform>();
+            var size = SizeCalculator.GetSize(node);
+            rt.sizeDelta = size;
+
+            var nodeRef = go.AddComponent<SoobakFigma2Unity.Runtime.FigmaNodeRef>();
+            nodeRef.FigmaNodeId = node.Id;
+
+            ApplyFrameProperties(go, node, ctx);
+
+            if (profile.ConvertAutoLayout && node.IsAutoLayout)
+                AutoLayoutMapper.Apply(go, node);
+
+            if (node.HasChildren)
+                ConvertChildren(node, go, ctx, profile);
+
+            return go;
         }
 
         private void CollectImageRequirements(FigmaNode node, ImportContext ctx)

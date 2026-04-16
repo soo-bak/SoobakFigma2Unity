@@ -1,5 +1,6 @@
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
+using SoobakFigma2Unity.Editor.Prefabs;
 using SoobakFigma2Unity.Runtime;
 using UnityEngine;
 
@@ -7,8 +8,8 @@ namespace SoobakFigma2Unity.Editor.Converters
 {
     /// <summary>
     /// Converts INSTANCE nodes.
-    /// P0: Converts inline (same as frame).
-    /// P1: Will link to existing prefabs as PrefabInstance.
+    /// If a matching prefab exists (generated from COMPONENT), creates a PrefabInstance.
+    /// Otherwise, falls back to inline conversion (same as FrameConverter).
     /// </summary>
     internal sealed class InstanceConverter : INodeConverter
     {
@@ -18,17 +19,24 @@ namespace SoobakFigma2Unity.Editor.Converters
 
         public GameObject Convert(FigmaNode node, GameObject parent, ImportContext ctx)
         {
-            // P0: treat as inline frame (same as FrameConverter)
-            // Log the component reference for awareness
+            // P1: Try to link as PrefabInstance if MapComponentInstances is enabled
+            if (ctx.Profile.MapComponentInstances && !string.IsNullOrEmpty(node.ComponentId))
+            {
+                var linker = new PrefabInstanceLinker(ctx.Logger);
+                var prefabInstance = linker.TryCreatePrefabInstance(node, parent, ctx);
+                if (prefabInstance != null)
+                    return prefabInstance;
+            }
+
+            // Fallback: inline conversion
             if (!string.IsNullOrEmpty(node.ComponentId) &&
                 ctx.Components.TryGetValue(node.ComponentId, out var component))
             {
-                ctx.Logger.Info($"{node.Name}: instance of component '{component.Name}' (inline, P1 will use PrefabInstance)");
+                ctx.Logger.Info($"{node.Name}: instance of '{component.Name}' (inline — no prefab generated yet)");
             }
 
             var go = _frameConverter.Convert(node, parent, ctx);
 
-            // Store componentId for future P1 linking
             var nodeRef = go.GetComponent<FigmaNodeRef>();
             if (nodeRef != null)
                 nodeRef.FigmaComponentId = node.ComponentId;

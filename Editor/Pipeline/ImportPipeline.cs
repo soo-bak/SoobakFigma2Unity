@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using SoobakFigma2Unity.Editor.Api;
 using SoobakFigma2Unity.Editor.Assets;
 using SoobakFigma2Unity.Editor.Converters;
-using SoobakFigma2Unity.Editor.Import;
 using SoobakFigma2Unity.Editor.Layout;
 using SoobakFigma2Unity.Editor.Mapping;
 using SoobakFigma2Unity.Editor.Models;
@@ -84,46 +83,6 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 _logger.Success($"Import complete! {frames.Count} prefab(s) created.");
             }
             catch (System.OperationCanceledException) { _logger.Warn("Import cancelled."); }
-            catch (System.Exception e) { _logger.Error($"Import failed: {e.Message}"); Debug.LogException(e); }
-            finally { progress.Done(); }
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  Mode 2: Local .soobak.json import
-        // ═══════════════════════════════════════════════════
-
-        public void RunFromExport(string exportFilePath, ImportProfile profile)
-        {
-            var progress = new ProgressReporter("SoobakFigma2Unity Import", 4);
-            try
-            {
-                progress.Step("Loading export file...");
-                var loader = new SoobakExportLoader(_logger);
-                var export = loader.Load(exportFilePath);
-                if (export == null) return;
-
-                var manifest = export.Manifest;
-                var ctx = CreateContext(profile, manifest.FileKey ?? "");
-                ctx.Components = manifest.Components ?? new Dictionary<string, FigmaComponent>();
-                ctx.ComponentSets = manifest.ComponentSets ?? new Dictionary<string, FigmaComponentSet>();
-
-                var frames = manifest.Frames;
-                if (frames == null || frames.Count == 0) { _logger.Error("No frames in export."); return; }
-                _logger.Success($"Loaded {frames.Count} frame(s).");
-
-                progress.Step("Extracting images...");
-                loader.ExtractImages(export, GetTempImageDir(), ctx);
-
-                progress.Step("Importing images...");
-                ctx.BuildNodeIndex(frames);
-                ImportAllImages(ctx, profile);
-
-                progress.Step("Generating prefabs...");
-                GenerateAndConvert(frames, ctx, profile);
-
-                SaveSnapshot(frames, manifest.FileKey ?? "", manifest.ExportedAt, profile);
-                _logger.Success($"Import complete! {frames.Count} prefab(s) created.");
-            }
             catch (System.Exception e) { _logger.Error($"Import failed: {e.Message}"); Debug.LogException(e); }
             finally { progress.Done(); }
         }

@@ -81,7 +81,41 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
                 _logger.Success($"Fetched {framesToConvert.Count} frame(s).");
 
-                // Step 2: Build node index and collect image requirements
+                // Step 2: Check for incremental update
+                var snapshot = ImportSnapshot.Load(profile.ScreenOutputPath);
+                HashSet<string> changedNodes = null;
+                bool isIncremental = false;
+
+                if (snapshot != null && snapshot.FileKey == fileKey)
+                {
+                    // Check if file version changed
+                    if (snapshot.LastModified == nodesResponse.LastModified &&
+                        Mathf.Approximately(snapshot.ImageScale, profile.ImageScale))
+                    {
+                        _logger.Info("No changes detected since last import. Skipping.");
+                        return;
+                    }
+
+                    // Determine which nodes changed
+                    changedNodes = new HashSet<string>();
+                    foreach (var frame in framesToConvert)
+                    {
+                        var frameChanges = snapshot.GetChangedNodeIds(frame);
+                        foreach (var id in frameChanges)
+                            changedNodes.Add(id);
+                    }
+
+                    if (changedNodes.Count == 0)
+                    {
+                        _logger.Info("No node-level changes detected. Skipping.");
+                        return;
+                    }
+
+                    isIncremental = true;
+                    _logger.Info($"Incremental update: {changedNodes.Count} node(s) changed.");
+                }
+
+                // Step 3: Build node index and collect image requirements
                 ctx.BuildNodeIndex(framesToConvert);
                 foreach (var frame in framesToConvert)
                     CollectImageRequirements(frame, ctx);
@@ -142,6 +176,18 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     AssetDatabase.StopAssetEditing();
                     AssetDatabase.Refresh();
                 }
+
+                // Save snapshot for incremental updates
+                var newSnapshot = new ImportSnapshot
+                {
+                    FileKey = fileKey,
+                    FileVersion = nodesResponse.LastModified,
+                    LastModified = nodesResponse.LastModified,
+                    ImageScale = profile.ImageScale
+                };
+                foreach (var frame in framesToConvert)
+                    newSnapshot.UpdateHashes(frame);
+                newSnapshot.Save(profile.ScreenOutputPath);
 
                 _logger.Success($"Import complete! {framesToConvert.Count} prefab(s) created.");
             }

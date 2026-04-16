@@ -215,7 +215,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     AnchorMapper.Apply(rt, childNode, parentNode);
                 else
                 {
-                    var relPos = SizeCalculator.GetRelativePosition(childNode, posParentNode);
+                    var relPos = SizeCalculator.GetRelativePosition(childNode, parentNode);
                     var childSize = SizeCalculator.GetSize(childNode);
                     rt.pivot = new Vector2(0.5f, 0.5f);
                     rt.anchorMin = new Vector2(0f, 1f);

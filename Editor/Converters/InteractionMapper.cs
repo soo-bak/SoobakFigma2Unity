@@ -29,15 +29,17 @@ namespace SoobakFigma2Unity.Editor.Converters
 
             foreach (var interaction in node.Interactions)
             {
-                if (interaction.Trigger == null) continue;
+                if (interaction == null || interaction.Trigger == null) continue;
 
                 foreach (var action in interaction.Actions ?? new List<FigmaAction>())
                 {
+                    if (action == null) continue;
+
                     var data = new FigmaInteractionHint.InteractionData
                     {
-                        Trigger = FormatTriggerType(interaction.Trigger.Type),
+                        Trigger = FormatTriggerType(interaction.Trigger.Type ?? ""),
                         TriggerTimeout = interaction.Trigger.Timeout,
-                        ActionType = FormatActionType(action.Navigation ?? action.Type),
+                        ActionType = FormatActionType(action.Navigation ?? action.Type ?? ""),
                         DestinationNodeId = action.DestinationId ?? "",
                         Url = action.Url ?? ""
                     };

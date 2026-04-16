@@ -42,6 +42,14 @@ namespace SoobakFigma2Unity.Editor.Converters
             if (image_ != null && !string.IsNullOrEmpty(node.BlendMode))
                 BlendModeHelper.TryApply(image_, node.BlendMode, ctx.Logger);
 
+            // Preserve mask metadata
+            if (node.IsMask)
+            {
+                var maskInfo = go.AddComponent<FigmaMaskInfo>();
+                maskInfo.IsMask = true;
+                ctx.Logger.Info($"{node.Name}: mask node (metadata preserved)");
+            }
+
             // Clips content → Mask
             if (node.ClipsContent)
             {

@@ -46,6 +46,35 @@ namespace SoobakFigma2Unity.Editor.Converters
                 ctx.Logger.Warn($"{node.Name}: vector node has no rasterized image");
             }
 
+            // Preserve mask/boolean metadata
+            if (node.IsMask || node.NodeType == FigmaNodeType.BOOLEAN_OPERATION)
+            {
+                var maskInfo = go.AddComponent<FigmaMaskInfo>();
+                maskInfo.IsMask = node.IsMask;
+
+                if (node.NodeType == FigmaNodeType.BOOLEAN_OPERATION)
+                {
+                    maskInfo.IsBooleanOperation = true;
+                    maskInfo.BooleanOperation = node.Type;
+
+                    // Store child node IDs for reference
+                    if (node.Children != null)
+                    {
+                        var ids = new string[node.Children.Count];
+                        for (int i = 0; i < node.Children.Count; i++)
+                            ids[i] = node.Children[i].Id;
+                        maskInfo.ChildNodeIds = ids;
+                    }
+
+                    ctx.Logger.Info($"{node.Name}: boolean operation '{node.Type}' rasterized (metadata preserved)");
+                }
+            }
+
+            // Blend mode
+            var img = go.GetComponent<Image>();
+            if (img != null && !string.IsNullOrEmpty(node.BlendMode))
+                BlendModeHelper.TryApply(img, node.BlendMode, ctx.Logger);
+
             // Opacity
             if (node.Opacity < 1f)
             {

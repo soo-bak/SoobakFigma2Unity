@@ -43,9 +43,12 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 FileKey = fileKey
             };
 
+            var progress = new ProgressReporter("SoobakFigma2Unity Import", 6);
+
             try
             {
                 // Step 1: Fetch full node trees for selected frames
+                progress.Step("Fetching node data from Figma...");
                 _logger.Info("Fetching node data from Figma...");
                 var nodesResponse = await _api.GetFileNodesAsync(fileKey, selectedNodeIds, ct);
 
@@ -121,6 +124,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 _logger.Info($"Nodes to rasterize: {ctx.NodesToRasterize.Count}, Image fills: {ctx.ImageFillRefs.Count}");
 
                 // Step 3: Download images
+                progress.Step($"Downloading {ctx.NodesToRasterize.Count} images...");
                 var imageDownloader = new ImageDownloader(_api, _logger);
 
                 if (ctx.NodesToRasterize.Count > 0)
@@ -147,16 +151,19 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 }
 
                 // Step 4: Import images into Unity as Sprites
+                progress.Step("Importing images into Unity...");
                 _logger.Info("Importing images into Unity...");
                 ImportAllImages(ctx, profile);
 
                 // Step 5: Generate component prefabs first (so instances can link to them)
+                progress.Step("Generating component prefabs...");
                 if (profile.Mode != ImportMode.ScreenOnly)
                 {
                     GenerateComponentPrefabs(framesToConvert, ctx, profile);
                 }
 
                 // Step 6: Convert each frame to GameObjects and save as prefabs
+                progress.Step("Converting frames to prefabs...");
                 AssetDatabase.StartAssetEditing();
                 try
                 {
@@ -187,6 +194,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     newSnapshot.UpdateHashes(frame);
                 newSnapshot.Save(profile.ScreenOutputPath);
 
+                progress.Step("Done!");
                 _logger.Success($"Import complete! {framesToConvert.Count} prefab(s) created.");
             }
             catch (System.OperationCanceledException)
@@ -197,6 +205,10 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             {
                 _logger.Error($"Import failed: {e.Message}");
                 Debug.LogException(e);
+            }
+            finally
+            {
+                progress.Done();
             }
         }
 

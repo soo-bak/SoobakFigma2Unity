@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using SoobakFigma2Unity.Editor.Api;
 using SoobakFigma2Unity.Editor.Util;
+using UnityEditor;
 
 namespace SoobakFigma2Unity.Editor.Assets
 {
@@ -43,12 +44,19 @@ namespace SoobakFigma2Unity.Editor.Assets
             var imageUrls = await _api.GetImageUrlsAsync(fileKey, nodeIds, scale, "png", ct);
 
             int downloaded = 0;
+            int total = imageUrls.Count;
             foreach (var kv in imageUrls)
             {
                 ct.ThrowIfCancellationRequested();
 
                 var nodeId = kv.Key;
                 var url = kv.Value;
+
+                downloaded++;
+                EditorUtility.DisplayProgressBar(
+                    "SoobakFigma2Unity Import",
+                    $"Downloading image {downloaded}/{total}...",
+                    (float)downloaded / total);
 
                 if (string.IsNullOrEmpty(url))
                 {
@@ -64,7 +72,6 @@ namespace SoobakFigma2Unity.Editor.Assets
                     var bytes = await _api.DownloadImageAsync(url, ct);
                     File.WriteAllBytes(filePath, bytes);
                     result[nodeId] = filePath;
-                    downloaded++;
                 }
                 catch (System.Exception e)
                 {

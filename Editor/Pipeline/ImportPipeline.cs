@@ -223,12 +223,19 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 }
 
                 var rt = childGo.GetComponent<RectTransform>();
-                var posParentNode = (currentMaskGo != null && !isMaskNode && targetParent == currentMaskGo)
-                    ? FindNodeById(parentNode, currentMaskGo.GetComponent<Runtime.FigmaNodeRef>()?.FigmaNodeId)
-                    : parentNode;
+                if (rt == null) continue;
 
-                // Use actual parent for positioning
-                if (posParentNode == null) posParentNode = parentNode;
+                // When child is placed under a mask, compute position relative to the mask node
+                FigmaNode posParentNode = parentNode;
+                if (currentMaskGo != null && !isMaskNode && targetParent == currentMaskGo)
+                {
+                    var maskRef = currentMaskGo.GetComponent<Runtime.FigmaNodeRef>();
+                    if (maskRef != null && !string.IsNullOrEmpty(maskRef.FigmaNodeId))
+                    {
+                        var maskNode = FindNodeById(parentNode, maskRef.FigmaNodeId);
+                        if (maskNode != null) posParentNode = maskNode;
+                    }
+                }
 
                 if (parentNode.IsAutoLayout && !childNode.IsAbsolutePositioned && targetParent == parentGo)
                 { if (profile.ConvertAutoLayout) AutoLayoutMapper.ApplyChildLayoutProperties(childGo, childNode, parentNode); }

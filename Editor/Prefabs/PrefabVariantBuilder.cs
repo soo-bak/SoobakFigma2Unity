@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using SoobakFigma2Unity.Editor.Converters;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
 using SoobakFigma2Unity.Editor.Util;
@@ -76,6 +77,11 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             var baseGo = convertFunc(baseVariant.Node);
             var baseName = SanitizeName(componentSetNode.Name);
             var basePath = Path.Combine(outputDir, $"{baseName}.prefab");
+
+            // Try to apply Selectable state mapping (Button/Toggle states)
+            var variantNodeMap = variants.ToDictionary(v => v.Id, v => v);
+            var stateMapper = new SelectableStateMapper(_logger);
+            stateMapper.TryApplyStates(baseGo, componentSetNode, variantNodeMap, ctx);
 
             var basePrefab = PrefabUtility.SaveAsPrefabAsset(baseGo, basePath);
             result[baseVariant.ComponentId] = basePath;

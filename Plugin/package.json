@@ -1,0 +1,13 @@
+{
+  "name": "soobak-figma2unity-plugin",
+  "version": "0.1.0",
+  "description": "Figma plugin to export designs for SoobakFigma2Unity",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.100.0",
+    "typescript": "^5.4.0"
+  }
+}

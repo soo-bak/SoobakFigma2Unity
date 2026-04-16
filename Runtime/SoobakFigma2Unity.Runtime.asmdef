@@ -1,0 +1,14 @@
+{
+  "name": "SoobakFigma2Unity.Runtime",
+  "rootNamespace": "SoobakFigma2Unity.Runtime",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

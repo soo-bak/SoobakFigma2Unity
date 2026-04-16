@@ -1,0 +1,21 @@
+{
+  "name": "SoobakFigma2Unity.Editor",
+  "rootNamespace": "SoobakFigma2Unity.Editor",
+  "references": [
+    "Unity.TextMeshPro",
+    "SoobakFigma2Unity.Runtime"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "Newtonsoft.Json.dll"
+  ],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

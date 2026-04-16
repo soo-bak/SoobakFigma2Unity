@@ -16,7 +16,6 @@ namespace SoobakFigma2Unity.Editor.Layout
 
             var isHorizontal = node.LayoutMode == "HORIZONTAL";
 
-            // Add the appropriate layout group
             HorizontalOrVerticalLayoutGroup layoutGroup;
             if (isHorizontal)
                 layoutGroup = go.AddComponent<HorizontalLayoutGroup>();
@@ -34,14 +33,14 @@ namespace SoobakFigma2Unity.Editor.Layout
             // Spacing
             layoutGroup.spacing = node.ItemSpacing;
 
-            // Child alignment from primaryAxisAlignItems + counterAxisAlignItems
+            // Child alignment
             layoutGroup.childAlignment = ComputeAlignment(
                 node.PrimaryAxisAlignItems,
                 node.CounterAxisAlignItems,
                 isHorizontal
             );
 
-            // Child force expand: only true for SPACE_BETWEEN
+            // SPACE_BETWEEN
             bool spaceAlong = node.PrimaryAxisAlignItems == "SPACE_BETWEEN";
             if (isHorizontal)
             {
@@ -54,66 +53,68 @@ namespace SoobakFigma2Unity.Editor.Layout
                 layoutGroup.childForceExpandHeight = spaceAlong;
             }
 
-            // Control child size: enabled so layout group manages sizing
+            // Let LayoutGroup control size
             layoutGroup.childControlWidth = true;
             layoutGroup.childControlHeight = true;
-
-            // Scale width/height: disabled
             layoutGroup.childScaleWidth = false;
             layoutGroup.childScaleHeight = false;
 
-            // ContentSizeFitter for auto-sizing
+            // ContentSizeFitter for auto-sizing parent
             ApplyContentSizeFitter(go, node, isHorizontal);
         }
 
         /// <summary>
-        /// Apply LayoutElement to a child within an auto-layout parent.
+        /// Apply LayoutElement + sizeDelta to a child within an auto-layout parent.
+        /// This is critical: Unity LayoutGroup needs both LayoutElement AND sizeDelta
+        /// to correctly size children.
         /// </summary>
         public static void ApplyChildLayoutProperties(GameObject childGo, FigmaNode childNode, FigmaNode parentNode)
         {
             if (!parentNode.IsAutoLayout)
                 return;
 
-            var layoutElement = childGo.AddComponent<LayoutElement>();
+            var rt = childGo.GetComponent<RectTransform>();
             var childSize = SizeCalculator.GetSize(childNode);
+
+            // Reset anchors for layout children — LayoutGroup will manage positioning
+            rt.anchorMin = new Vector2(0, 1);
+            rt.anchorMax = new Vector2(0, 1);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.sizeDelta = childSize;
+
+            var layoutElement = childGo.AddComponent<LayoutElement>();
 
             var hSizing = childNode.LayoutSizingHorizontal ?? "FIXED";
             var vSizing = childNode.LayoutSizingVertical ?? "FIXED";
 
-            // Horizontal sizing
+            // Horizontal
             switch (hSizing)
             {
                 case "FIXED":
                     layoutElement.preferredWidth = childSize.x;
-                    layoutElement.flexibleWidth = -1;
+                    layoutElement.minWidth = childSize.x;
                     break;
                 case "FILL":
                     layoutElement.flexibleWidth = childNode.LayoutGrow > 0 ? childNode.LayoutGrow : 1f;
                     break;
                 case "HUG":
-                    layoutElement.flexibleWidth = -1;
-                    // Will be sized by own ContentSizeFitter or preferred size
+                    // Prefer content-driven size
                     break;
             }
 
-            // Vertical sizing
+            // Vertical
             switch (vSizing)
             {
                 case "FIXED":
                     layoutElement.preferredHeight = childSize.y;
-                    layoutElement.flexibleHeight = -1;
+                    layoutElement.minHeight = childSize.y;
                     break;
                 case "FILL":
                     layoutElement.flexibleHeight = childNode.LayoutGrow > 0 ? childNode.LayoutGrow : 1f;
                     break;
                 case "HUG":
-                    layoutElement.flexibleHeight = -1;
                     break;
             }
-
-            // Minimum size
-            layoutElement.minWidth = -1;
-            layoutElement.minHeight = -1;
         }
 
         private static void ApplyContentSizeFitter(GameObject go, FigmaNode node, bool isHorizontal)
@@ -149,22 +150,15 @@ namespace SoobakFigma2Unity.Editor.Layout
         private static TextAnchor ComputeAlignment(
             string primaryAlign, string counterAlign, bool isHorizontal)
         {
-            // Map primary (along main axis) and counter (cross axis) to TextAnchor.
-            // TextAnchor is: UpperLeft, UpperCenter, UpperRight,
-            //                MiddleLeft, MiddleCenter, MiddleRight,
-            //                LowerLeft, LowerCenter, LowerRight
-
-            int row, col; // row: 0=Upper, 1=Middle, 2=Lower; col: 0=Left, 1=Center, 2=Right
+            int row, col;
 
             if (isHorizontal)
             {
-                // Primary = horizontal (col), Counter = vertical (row)
                 col = MapAlignToIndex(primaryAlign);
                 row = MapAlignToIndex(counterAlign);
             }
             else
             {
-                // Primary = vertical (row), Counter = horizontal (col)
                 row = MapAlignToIndex(primaryAlign);
                 col = MapAlignToIndex(counterAlign);
             }
@@ -179,8 +173,8 @@ namespace SoobakFigma2Unity.Editor.Layout
                 "MIN" => 0,
                 "CENTER" => 1,
                 "MAX" => 2,
-                "SPACE_BETWEEN" => 0, // Fallback; SPACE_BETWEEN handled via childForceExpand
-                "BASELINE" => 0,      // Fallback
+                "SPACE_BETWEEN" => 0,
+                "BASELINE" => 0,
                 _ => 0
             };
         }

@@ -8,6 +8,9 @@ namespace SoobakFigma2Unity.Editor.Layout
     ///
     /// Figma coordinate system: origin top-left, Y increases downward.
     /// Unity RectTransform: anchor-relative, Y increases upward.
+    ///
+    /// Uses offsetMin/offsetMax (not anchoredPosition/sizeDelta) for non-stretch cases too,
+    /// which is pivot-independent and more reliable.
     /// </summary>
     internal static class AnchorMapper
     {
@@ -16,11 +19,13 @@ namespace SoobakFigma2Unity.Editor.Layout
             if (node.AbsoluteBoundingBox == null || parent.AbsoluteBoundingBox == null)
                 return;
 
+            // Always reset pivot to center for consistency
+            rt.pivot = new Vector2(0.5f, 0.5f);
+
             var constraints = node.Constraints;
             if (constraints == null)
             {
-                // Default: top-left anchored
-                ApplyFixed(rt, node, parent);
+                ApplyDefault(rt, node, parent);
                 return;
             }
 
@@ -33,7 +38,7 @@ namespace SoobakFigma2Unity.Editor.Layout
             ComputeHorizontal(constraints.HorizontalType, childSize.x, parentSize.x, left, right,
                 out anchorMinX, out anchorMaxX, out offsetMinX, out offsetMaxX);
 
-            // Vertical (Figma Y-down → Unity Y-up: swap top/bottom roles)
+            // Vertical (Figma Y-down → Unity Y-up)
             float anchorMinY, anchorMaxY, offsetMinY, offsetMaxY;
             ComputeVertical(constraints.VerticalType, childSize.y, parentSize.y, top, bottom,
                 out anchorMinY, out anchorMaxY, out offsetMinY, out offsetMaxY);
@@ -69,12 +74,12 @@ namespace SoobakFigma2Unity.Editor.Layout
                 case ConstraintType.CENTER:
                     anchorMin = 0.5f;
                     anchorMax = 0.5f;
-                    float centerOffset = leftMargin - (parentWidth - childWidth) / 2f;
-                    offsetMin = centerOffset;
-                    offsetMax = centerOffset + childWidth;
+                    float hCenter = (leftMargin - rightMargin) / 2f;
+                    offsetMin = hCenter - childWidth / 2f;
+                    offsetMax = hCenter + childWidth / 2f;
                     break;
 
-                case ConstraintType.STRETCH: // LEFT_RIGHT
+                case ConstraintType.STRETCH:
                     anchorMin = 0f;
                     anchorMax = 1f;
                     offsetMin = leftMargin;
@@ -99,18 +104,16 @@ namespace SoobakFigma2Unity.Editor.Layout
             out float anchorMin, out float anchorMax,
             out float offsetMin, out float offsetMax)
         {
-            // Unity Y-up: anchorMin.y=0 is bottom, anchorMin.y=1 is top.
-            // Figma Y-down: TOP constraint means element stays near top (Unity anchor=1).
             switch (constraint)
             {
-                case ConstraintType.MIN: // TOP in Figma
+                case ConstraintType.MIN: // TOP in Figma → top in Unity (anchor=1)
                     anchorMin = 1f;
                     anchorMax = 1f;
                     offsetMin = -(topMargin + childHeight);
                     offsetMax = -topMargin;
                     break;
 
-                case ConstraintType.MAX: // BOTTOM in Figma
+                case ConstraintType.MAX: // BOTTOM in Figma → bottom in Unity (anchor=0)
                     anchorMin = 0f;
                     anchorMax = 0f;
                     offsetMin = bottomMargin;
@@ -120,12 +123,12 @@ namespace SoobakFigma2Unity.Editor.Layout
                 case ConstraintType.CENTER:
                     anchorMin = 0.5f;
                     anchorMax = 0.5f;
-                    float centerOffset = (parentHeight - childHeight) / 2f - topMargin;
-                    offsetMin = -centerOffset - childHeight / 2f;
-                    offsetMax = -centerOffset + childHeight / 2f;
+                    float vCenter = (bottomMargin - topMargin) / 2f;
+                    offsetMin = vCenter - childHeight / 2f;
+                    offsetMax = vCenter + childHeight / 2f;
                     break;
 
-                case ConstraintType.STRETCH: // TOP_BOTTOM
+                case ConstraintType.STRETCH:
                     anchorMin = 0f;
                     anchorMax = 1f;
                     offsetMin = bottomMargin;
@@ -145,18 +148,17 @@ namespace SoobakFigma2Unity.Editor.Layout
         }
 
         /// <summary>
-        /// Default fixed positioning: top-left anchored.
+        /// Default: top-left anchored with absolute position.
         /// </summary>
-        private static void ApplyFixed(RectTransform rt, FigmaNode node, FigmaNode parent)
+        private static void ApplyDefault(RectTransform rt, FigmaNode node, FigmaNode parent)
         {
             var childSize = SizeCalculator.GetSize(node);
-            var (left, top, _, _) = SizeCalculator.GetMargins(node, parent);
+            var (left, top, right, bottom) = SizeCalculator.GetMargins(node, parent);
 
             rt.anchorMin = new Vector2(0f, 1f);
             rt.anchorMax = new Vector2(0f, 1f);
-            rt.pivot = new Vector2(0f, 1f);
-            rt.anchoredPosition = new Vector2(left, -top);
-            rt.sizeDelta = childSize;
+            rt.offsetMin = new Vector2(left, -(top + childSize.y));
+            rt.offsetMax = new Vector2(left + childSize.x, -top);
         }
     }
 }

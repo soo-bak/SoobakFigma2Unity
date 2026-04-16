@@ -322,11 +322,11 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     // Fallback: absolute positioning with top-left anchor
                     var relPos = SizeCalculator.GetRelativePosition(childNode, parentNode);
                     var childSize = SizeCalculator.GetSize(childNode);
+                    rt.pivot = new Vector2(0.5f, 0.5f);
                     rt.anchorMin = new Vector2(0f, 1f);
                     rt.anchorMax = new Vector2(0f, 1f);
-                    rt.pivot = new Vector2(0f, 1f);
-                    rt.anchoredPosition = new Vector2(relPos.x, -relPos.y);
-                    rt.sizeDelta = childSize;
+                    rt.offsetMin = new Vector2(relPos.x, -(relPos.y + childSize.y));
+                    rt.offsetMax = new Vector2(relPos.x + childSize.x, -relPos.y);
                 }
 
                 // Apply auto-layout if this child is also an auto-layout container

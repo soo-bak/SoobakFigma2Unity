@@ -65,14 +65,41 @@ namespace SoobakFigma2Unity.Editor.Converters
                 t == FigmaNodeType.BOOLEAN_OPERATION)
                 return true;
 
-            // Frames/rectangles with gradient fills need rasterization
             if (node.Fills != null)
             {
                 foreach (var fill in node.Fills)
                 {
-                    if (fill.Visible && fill.Opacity > 0f && fill.IsGradient)
+                    if (!fill.Visible || fill.Opacity <= 0f)
+                        continue;
+
+                    // Gradient fills need rasterization
+                    if (fill.IsGradient)
+                        return true;
+
+                    // Image fills with FILL scaleMode (crop) need rasterization
+                    // as the node itself to capture the correct crop
+                    if (fill.IsImage && fill.ScaleMode == "FILL")
                         return true;
                 }
+            }
+
+            // Nodes with visible effects (shadow, blur) need rasterization
+            if (node.Effects != null)
+            {
+                foreach (var effect in node.Effects)
+                {
+                    if (effect.Visible)
+                        return true;
+                }
+            }
+
+            // Non-uniform corner radius on a filled frame needs rasterization
+            if (node.RectangleCornerRadii != null && node.RectangleCornerRadii.Length == 4 &&
+                node.HasVisibleFills)
+            {
+                var r = node.RectangleCornerRadii;
+                if (r[0] != r[1] || r[1] != r[2] || r[2] != r[3])
+                    return true;
             }
 
             return false;

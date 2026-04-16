@@ -17,7 +17,13 @@ namespace SoobakFigma2Unity.Editor.Api
 
     public class FigmaRateLimitException : FigmaApiException
     {
-        public FigmaRateLimitException() : base("Figma API rate limit exceeded (429).") { }
+        public int RetryAfterMs { get; }
+
+        public FigmaRateLimitException(int retryAfterMs = 0)
+            : base("Figma API rate limit exceeded (429).")
+        {
+            RetryAfterMs = retryAfterMs;
+        }
     }
 
     internal sealed class FigmaApiClient : IDisposable
@@ -32,6 +38,11 @@ namespace SoobakFigma2Unity.Editor.Api
             _http.DefaultRequestHeaders.Add("X-FIGMA-TOKEN", personalAccessToken);
             _http.Timeout = TimeSpan.FromSeconds(120);
             _queue = new RequestQueue();
+            _queue.OnRetry += (attempt, max, delayMs) =>
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[SoobakFigma2Unity] Rate limited. Retry {attempt}/{max} in {delayMs}ms...");
+            };
         }
 
         /// <summary>
@@ -121,7 +132,14 @@ namespace SoobakFigma2Unity.Editor.Api
                 var response = await _http.GetAsync(url, ct);
 
                 if ((int)response.StatusCode == 429)
-                    throw new FigmaRateLimitException();
+                {
+                    int retryAfterMs = 0;
+                    if (response.Headers.RetryAfter?.Delta != null)
+                        retryAfterMs = (int)response.Headers.RetryAfter.Delta.Value.TotalMilliseconds;
+                    else if (response.Headers.RetryAfter?.Date != null)
+                        retryAfterMs = (int)(response.Headers.RetryAfter.Date.Value - DateTimeOffset.UtcNow).TotalMilliseconds;
+                    throw new FigmaRateLimitException(Math.Max(retryAfterMs, 0));
+                }
 
                 if (!response.IsSuccessStatusCode)
                 {

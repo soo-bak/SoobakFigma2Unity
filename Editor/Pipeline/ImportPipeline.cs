@@ -213,7 +213,12 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
                 if (profile.ConvertAutoLayout && childNode.IsAutoLayout)
                     AutoLayoutMapper.Apply(childGo, childNode);
-                if (childNode.HasChildren && childNode.NodeType != FigmaNodeType.TEXT)
+
+                // Don't recurse into children if:
+                // - TEXT nodes (text is a leaf)
+                // - Rasterized nodes (already rendered as one image, children are baked in)
+                bool isRasterized = ctx.NodeSprites.ContainsKey(childNode.Id);
+                if (childNode.HasChildren && childNode.NodeType != FigmaNodeType.TEXT && !isRasterized)
                     ConvertChildren(childNode, childGo, ctx, profile);
 
                 if (childNode.NodeType != FigmaNodeType.TEXT)
@@ -301,7 +306,8 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             go.AddComponent<Runtime.FigmaNodeRef>().FigmaNodeId = node.Id;
             ApplyFrameProperties(go, node, ctx);
             if (profile.ConvertAutoLayout && node.IsAutoLayout) AutoLayoutMapper.Apply(go, node);
-            if (node.HasChildren) ConvertChildren(node, go, ctx, profile);
+            bool isRasterized = ctx.NodeSprites.ContainsKey(node.Id);
+            if (node.HasChildren && !isRasterized) ConvertChildren(node, go, ctx, profile);
             return go;
         }
 

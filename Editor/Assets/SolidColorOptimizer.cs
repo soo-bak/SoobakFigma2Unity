@@ -15,6 +15,14 @@ namespace SoobakFigma2Unity.Editor.Assets
         /// </summary>
         public static bool CanUseSolidColor(FigmaNode node)
         {
+            // Vector types and boolean operations always need rasterization
+            // (their shape can't be represented by a simple colored rectangle)
+            var t = node.NodeType;
+            if (t == FigmaNodeType.VECTOR || t == FigmaNodeType.ELLIPSE ||
+                t == FigmaNodeType.STAR || t == FigmaNodeType.LINE ||
+                t == FigmaNodeType.REGULAR_POLYGON || t == FigmaNodeType.BOOLEAN_OPERATION)
+                return false;
+
             // Must have fills
             if (node.Fills == null || node.Fills.Count == 0)
                 return false;
@@ -46,6 +54,20 @@ namespace SoobakFigma2Unity.Editor.Assets
                 {
                     if (effect.Visible && (effect.EffectType == EffectType.DROP_SHADOW ||
                                            effect.EffectType == EffectType.INNER_SHADOW))
+                        return false;
+                }
+            }
+
+            // Corner radius means the shape is rounded — can't use a plain rectangle
+            if (node.CornerRadius > 0)
+                return false;
+
+            // Strokes with non-zero weight also need rasterization
+            if (node.StrokeWeight > 0 && node.Strokes != null && node.Strokes.Count > 0)
+            {
+                foreach (var stroke in node.Strokes)
+                {
+                    if (stroke.Visible && stroke.Opacity > 0f)
                         return false;
                 }
             }

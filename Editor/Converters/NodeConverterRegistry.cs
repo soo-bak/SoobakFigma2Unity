@@ -102,6 +102,65 @@ namespace SoobakFigma2Unity.Editor.Converters
                     return true;
             }
 
+            // Nodes with clipsContent that contain masks → complex composition, rasterize
+            if (node.ClipsContent && ContainsMask(node))
+                return true;
+
+            // Groups containing mask nodes → rasterize the group
+            if (t == FigmaNodeType.GROUP && ContainsMask(node))
+                return true;
+
+            // INSTANCE/FRAME with image fills (STRETCH) should be rasterized
+            // to capture the correct image rendering
+            if (node.Fills != null)
+            {
+                foreach (var fill in node.Fills)
+                {
+                    if (fill.Visible && fill.IsImage)
+                        return true;
+                }
+            }
+
+            // Nodes containing children with image fills in a clipped context
+            if (node.ClipsContent && ContainsImageFill(node))
+                return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// Check if any descendant has isMask=true.
+        /// </summary>
+        private static bool ContainsMask(FigmaNode node)
+        {
+            if (node.IsMask) return true;
+            if (node.Children != null)
+                foreach (var child in node.Children)
+                    if (ContainsMask(child))
+                        return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Check if any direct child has an image fill.
+        /// </summary>
+        private static bool ContainsImageFill(FigmaNode node)
+        {
+            if (node.Children == null) return false;
+            foreach (var child in node.Children)
+            {
+                if (child.Fills != null)
+                    foreach (var fill in child.Fills)
+                        if (fill.Visible && fill.IsImage)
+                            return true;
+                // Check one level deeper for nested image fills
+                if (child.Children != null)
+                    foreach (var grandchild in child.Children)
+                        if (grandchild.Fills != null)
+                            foreach (var fill in grandchild.Fills)
+                                if (fill.Visible && fill.IsImage)
+                                    return true;
+            }
             return false;
         }
     }

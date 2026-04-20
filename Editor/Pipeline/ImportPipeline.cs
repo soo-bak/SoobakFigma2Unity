@@ -224,18 +224,36 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
                 // Position relative to the *logical* parent (mask node when redirected, else real parent)
                 if (!redirectIntoMask && parentNode.IsAutoLayout && !childNode.IsAbsolutePositioned)
-                { if (profile.ConvertAutoLayout) AutoLayoutMapper.ApplyChildLayoutProperties(childGo, childNode, parentNode); }
-                else if (profile.ApplyConstraints)
-                    AnchorMapper.Apply(rt, childNode, posParentNode);
+                {
+                    if (profile.ConvertAutoLayout)
+                        AutoLayoutMapper.ApplyChildLayoutProperties(childGo, childNode, parentNode);
+                }
                 else
                 {
-                    var relPos = SizeCalculator.GetRelativePosition(childNode, posParentNode);
-                    var childSize = SizeCalculator.GetSize(childNode);
-                    rt.pivot = new Vector2(0.5f, 0.5f);
-                    rt.anchorMin = new Vector2(0f, 1f);
-                    rt.anchorMax = new Vector2(0f, 1f);
-                    rt.offsetMin = new Vector2(relPos.x, -(relPos.y + childSize.y));
-                    rt.offsetMax = new Vector2(relPos.x + childSize.x, -relPos.y);
+                    // Constraint-based positioning (used for absolute children of auto-layout
+                    // parents AND non-auto-layout siblings). For absolute children inside an
+                    // auto-layout parent, also tell Unity LayoutGroup to ignore this child.
+                    if (parentNode.IsAutoLayout && childNode.IsAbsolutePositioned)
+                    {
+                        var le = childGo.GetComponent<UnityEngine.UI.LayoutElement>()
+                            ?? childGo.AddComponent<UnityEngine.UI.LayoutElement>();
+                        le.ignoreLayout = true;
+                    }
+
+                    if (profile.ApplyConstraints)
+                    {
+                        AnchorMapper.Apply(rt, childNode, posParentNode);
+                    }
+                    else
+                    {
+                        var relPos = SizeCalculator.GetRelativePosition(childNode, posParentNode);
+                        var childSize = SizeCalculator.GetSize(childNode);
+                        rt.pivot = new Vector2(0.5f, 0.5f);
+                        rt.anchorMin = new Vector2(0f, 1f);
+                        rt.anchorMax = new Vector2(0f, 1f);
+                        rt.offsetMin = new Vector2(relPos.x, -(relPos.y + childSize.y));
+                        rt.offsetMax = new Vector2(relPos.x + childSize.x, -relPos.y);
+                    }
                 }
 
                 if (profile.ConvertAutoLayout && childNode.IsAutoLayout)

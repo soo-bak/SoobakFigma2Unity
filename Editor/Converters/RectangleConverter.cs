@@ -2,7 +2,6 @@ using SoobakFigma2Unity.Editor.Assets;
 using SoobakFigma2Unity.Editor.Color;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
-using SoobakFigma2Unity.Runtime;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -24,9 +23,7 @@ namespace SoobakFigma2Unity.Editor.Converters
             go.AddComponent<RectTransform>();
             if (parent != null)
                 go.transform.SetParent(parent.transform, false);
-
-            var nodeRef = go.AddComponent<FigmaNodeRef>();
-            nodeRef.FigmaNodeId = node.Id;
+            ctx.NodeIdentities[go.transform] = new ImportContext.NodeIdentityRecord(node.Id, null);
 
             // Decide visual content (don't add Image until we have something to show)
             Sprite chosenSprite = null;
@@ -74,7 +71,19 @@ namespace SoobakFigma2Unity.Editor.Converters
                 else
                 {
                     image.color = chosenColor.Value;
+                    if (node.CornerRadius > 0)
+                    {
+                        var rounded = RoundedRectSpriteGenerator.GetOrGenerate(
+                            node.CornerRadius, ctx.Profile.ImageScale, ctx.Profile.ImageOutputPath, ctx.Logger);
+                        if (rounded != null)
+                        {
+                            image.sprite = rounded;
+                            image.type = Image.Type.Sliced;
+                        }
+                    }
                 }
+
+                BlendModeHelper.TryApply(image, node.BlendMode, ctx.Logger);
             }
 
             // Node opacity → CanvasGroup (composes with parent CanvasGroups,

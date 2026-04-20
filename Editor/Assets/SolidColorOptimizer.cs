@@ -58,10 +58,6 @@ namespace SoobakFigma2Unity.Editor.Assets
                 }
             }
 
-            // Corner radius means the shape is rounded — can't use a plain rectangle
-            if (node.CornerRadius > 0)
-                return false;
-
             // Strokes with non-zero weight also need rasterization
             if (node.StrokeWeight > 0 && node.Strokes != null && node.Strokes.Count > 0)
             {

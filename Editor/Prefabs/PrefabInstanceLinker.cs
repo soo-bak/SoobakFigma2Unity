@@ -2,7 +2,6 @@ using SoobakFigma2Unity.Editor.Color;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
 using SoobakFigma2Unity.Editor.Util;
-using SoobakFigma2Unity.Runtime;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
@@ -51,13 +50,6 @@ namespace SoobakFigma2Unity.Editor.Prefabs
 
             // Apply instance overrides from Figma
             ApplyInstanceOverrides(instance, instanceNode, ctx);
-
-            // Update FigmaNodeRef
-            var nodeRef = instance.GetComponent<FigmaNodeRef>();
-            if (nodeRef == null)
-                nodeRef = instance.AddComponent<FigmaNodeRef>();
-            nodeRef.FigmaNodeId = instanceNode.Id;
-            nodeRef.FigmaComponentId = instanceNode.ComponentId;
 
             _logger.Info($"{instanceNode.Name}: linked to prefab '{prefabAsset.name}'");
             return instance;

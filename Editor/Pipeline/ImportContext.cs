@@ -51,6 +51,24 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         /// <summary>Index of all nodes by ID (for lookups during image import).</summary>
         public Dictionary<string, FigmaNode> NodeIndex { get; set; } = new Dictionary<string, FigmaNode>();
 
+        /// <summary>
+        /// Identity record for every GameObject the converters produce during this import.
+        /// Keyed by Transform so the ManifestBuilder can attach a FigmaPrefabManifest on the
+        /// prefab root just before SaveAsPrefabAsset.
+        /// </summary>
+        public Dictionary<Transform, NodeIdentityRecord> NodeIdentities { get; set; } = new Dictionary<Transform, NodeIdentityRecord>();
+
+        public readonly struct NodeIdentityRecord
+        {
+            public readonly string FigmaNodeId;
+            public readonly string FigmaComponentId;
+            public NodeIdentityRecord(string figmaNodeId, string figmaComponentId)
+            {
+                FigmaNodeId = figmaNodeId;
+                FigmaComponentId = figmaComponentId;
+            }
+        }
+
         /// <summary>Build the node index from a list of root frames.</summary>
         public void BuildNodeIndex(IEnumerable<FigmaNode> roots)
         {

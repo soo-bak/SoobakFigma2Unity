@@ -14,6 +14,19 @@ namespace SoobakFigma2Unity.Editor.Settings
         Gamma
     }
 
+    /// <summary>
+    /// Controls what happens on re-import when a prefab already exists.
+    /// </summary>
+    public enum MergeMode
+    {
+        /// <summary>Merge with existing prefab. Preserve user-added components, children,
+        /// and any components the user locked (either whole-GO or per-type). Default.</summary>
+        SmartMerge,
+        /// <summary>Blow the existing prefab away and save the freshly-built one as-is. Loses
+        /// all user edits. Available for debugging or for intentional resets.</summary>
+        FullReplace
+    }
+
     [System.Serializable]
     public sealed class ImportProfile
     {
@@ -43,7 +56,10 @@ namespace SoobakFigma2Unity.Editor.Settings
         // Prefab (P1 features, kept as flags)
         public bool GeneratePrefabVariants = true;
         public bool MapComponentInstances = true;
-        public bool PreserveOnReimport = true;
+
+        // Re-import behaviour
+        public MergeMode MergeMode = MergeMode.SmartMerge;
+        public int BackupRetentionCount = 5;
 
         // Output paths
         public string PrefabOutputPath = "Assets/UI/Prefabs";

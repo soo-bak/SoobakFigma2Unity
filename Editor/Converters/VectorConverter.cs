@@ -29,9 +29,7 @@ namespace SoobakFigma2Unity.Editor.Converters
             go.AddComponent<RectTransform>();
             if (parent != null)
                 go.transform.SetParent(parent.transform, false);
-
-            var nodeRef = go.AddComponent<FigmaNodeRef>();
-            nodeRef.FigmaNodeId = node.Id;
+            ctx.NodeIdentities[go.transform] = new ImportContext.NodeIdentityRecord(node.Id, null);
 
             if (ctx.NodeSprites.TryGetValue(node.Id, out var sprite))
             {

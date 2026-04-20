@@ -1,5 +1,8 @@
+using System;
+using System.Collections.Generic;
 using System.Threading;
 using SoobakFigma2Unity.Editor.Api;
+using SoobakFigma2Unity.Editor.Mapping;
 using SoobakFigma2Unity.Editor.Pipeline;
 using SoobakFigma2Unity.Editor.Settings;
 using SoobakFigma2Unity.Editor.Util;
@@ -10,7 +13,7 @@ namespace SoobakFigma2Unity.Editor.Window
 {
     public sealed class SoobakFigma2UnityWindow : EditorWindow
     {
-        [MenuItem("Window/SoobakFigma2Unity")]
+        [MenuItem("Window/SoobakFigma2Unity/Importer")]
         public static void ShowWindow()
         {
             var window = GetWindow<SoobakFigma2UnityWindow>();
@@ -29,6 +32,11 @@ namespace SoobakFigma2Unity.Editor.Window
 
         private string _figmaUrl = "";
         private string _token = "";
+
+        // Tracks paths touched by the most-recent successful import so the user can undo.
+        private readonly List<string> _lastImportedPaths = new List<string>();
+        private DateTime _lastImportAt = DateTime.MinValue;
+        private const double UndoVisibilityMinutes = 30;
 
         private static readonly string[] ScaleLabels = { "1x", "2x", "3x", "4x" };
         private static readonly float[] ScaleValues = { 1f, 2f, 3f, 4f };
@@ -56,20 +64,40 @@ namespace SoobakFigma2Unity.Editor.Window
             _cts?.Dispose();
         }
 
+        private bool _showAdvanced;
+        private bool _showLog;
+
         private void OnGUI()
         {
             _mainScroll = EditorGUILayout.BeginScrollView(_mainScroll);
 
+            // ── Primary (always visible) ──
             DrawConnectionSection();
             DrawFrameSelectionSection();
-            DrawImportModeSection();
-            DrawImageSection();
-            DrawLayoutSection();
-            DrawColorSection();
-            DrawPrefabSection();
-            DrawOutputSection();
+            DrawReimportSection();
             DrawImportButton();
-            DrawLogSection();
+            DrawUndoSection();
+
+            // ── Advanced (collapsed by default) ──
+            EditorGUILayout.Space(4);
+            _showAdvanced = EditorGUILayout.Foldout(_showAdvanced, "Advanced", true, EditorStyles.foldoutHeader);
+            if (_showAdvanced)
+            {
+                EditorGUI.indentLevel++;
+                DrawImportModeSection();
+                DrawImageSection();
+                DrawOutputSection();
+                DrawLayoutSection();
+                DrawColorSection();
+                DrawPrefabSection();
+                EditorGUI.indentLevel--;
+            }
+
+            // ── Log (collapsed by default) ──
+            EditorGUILayout.Space(4);
+            _showLog = EditorGUILayout.Foldout(_showLog, $"Log ({_logger.Entries.Count})", true, EditorStyles.foldoutHeader);
+            if (_showLog)
+                DrawLogSection();
 
             EditorGUILayout.EndScrollView();
         }
@@ -77,29 +105,25 @@ namespace SoobakFigma2Unity.Editor.Window
         // ─── Connection ─────────────────────────────────
         private void DrawConnectionSection()
         {
-            EditorGUILayout.LabelField("Connection", EditorStyles.boldLabel);
-            EditorGUI.indentLevel++;
+            EditorGUILayout.LabelField("Figma", EditorStyles.boldLabel);
 
-            _figmaUrl = EditorGUILayout.TextField("Figma URL", _figmaUrl);
+            _figmaUrl = EditorGUILayout.TextField(
+                new GUIContent("File URL", "Paste a Figma file URL (or a node URL)."),
+                _figmaUrl);
 
-            EditorGUILayout.BeginHorizontal();
-            _token = EditorGUILayout.PasswordField("Token", _token);
-            if (GUILayout.Button("Save", GUILayout.Width(50)))
+            EditorGUI.BeginChangeCheck();
+            _token = EditorGUILayout.PasswordField(
+                new GUIContent("Token", "Personal Access Token. Create one at figma.com > Settings > Account > Personal access tokens."),
+                _token);
+            if (EditorGUI.EndChangeCheck())
+                SoobakSettings.Token = _token; // auto-save on change
+
+            using (new EditorGUI.DisabledScope(_isFetching || _isImporting))
             {
-                SoobakSettings.Token = _token;
-                _logger.Info("Token saved.");
+                if (GUILayout.Button(_isFetching ? "Fetching…" : "📥 Fetch from Figma", GUILayout.Height(26)))
+                    FetchFromApi();
             }
-            EditorGUILayout.EndHorizontal();
 
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-            EditorGUI.BeginDisabledGroup(_isFetching || _isImporting);
-            if (GUILayout.Button("Fetch", GUILayout.Width(80)))
-                FetchFromApi();
-            EditorGUI.EndDisabledGroup();
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUI.indentLevel--;
             EditorGUILayout.Space(8);
         }
 
@@ -164,7 +188,6 @@ namespace SoobakFigma2Unity.Editor.Window
             EditorGUI.indentLevel++;
             _profile.GeneratePrefabVariants = EditorGUILayout.Toggle("Generate Prefab Variants", _profile.GeneratePrefabVariants);
             _profile.MapComponentInstances = EditorGUILayout.Toggle("Map Instances → Prefab Instances", _profile.MapComponentInstances);
-            _profile.PreserveOnReimport = EditorGUILayout.Toggle("Preserve modifications on re-import", _profile.PreserveOnReimport);
             EditorGUI.indentLevel--;
             EditorGUILayout.Space(8);
         }
@@ -199,16 +222,48 @@ namespace SoobakFigma2Unity.Editor.Window
             return path;
         }
 
+        // ─── Re-import Settings ─────────────────────────
+        private void DrawReimportSection()
+        {
+            EditorGUILayout.LabelField("Re-import", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            var prevMode = _profile.MergeMode;
+            _profile.MergeMode = (MergeMode)EditorGUILayout.EnumPopup(
+                new GUIContent("Merge Mode",
+                    "Smart Merge (default): preserves your Unity-side additions (components, scripts, child GameObjects).\n" +
+                    "Full Replace: rewrites each prefab from scratch — all user edits are lost."),
+                _profile.MergeMode);
+
+            if (_profile.MergeMode == MergeMode.FullReplace && prevMode != MergeMode.FullReplace)
+            {
+                // Guard against accidental selection of the destructive mode.
+                var ok = EditorUtility.DisplayDialog(
+                    "Switch to Full Replace?",
+                    "Full Replace overwrites each imported prefab, deleting any components, " +
+                    "child GameObjects, or Inspector tweaks you've added on the Unity side.\n\n" +
+                    "Continue?",
+                    "Yes, Full Replace", "Cancel");
+                if (!ok)
+                    _profile.MergeMode = prevMode;
+            }
+
+            EditorGUI.indentLevel--;
+            EditorGUILayout.Space(8);
+        }
+
         // ─── Import Button ──────────────────────────────
         private void DrawImportButton()
         {
             EditorGUILayout.Space(4);
             var style = new GUIStyle(GUI.skin.button) { fontStyle = FontStyle.Bold, fixedHeight = 32 };
 
-            EditorGUI.BeginDisabledGroup(_isFetching || _isImporting);
-            if (GUILayout.Button(_isImporting ? "Importing..." : "Import Selected", style))
-                RunImport();
-            EditorGUI.EndDisabledGroup();
+            using (new EditorGUI.DisabledScope(_isFetching || _isImporting))
+            {
+                var label = _isImporting ? "Importing…" : "Import Selected";
+                if (GUILayout.Button(label, style))
+                    RunImport();
+            }
 
             if (_isImporting && GUILayout.Button("Cancel"))
                 _cts?.Cancel();
@@ -216,12 +271,61 @@ namespace SoobakFigma2Unity.Editor.Window
             EditorGUILayout.Space(8);
         }
 
+        // ─── Undo Last Import ───────────────────────────
+        private void DrawUndoSection()
+        {
+            bool hasRecent = _lastImportedPaths.Count > 0 &&
+                             (DateTime.UtcNow - _lastImportAt).TotalMinutes <= UndoVisibilityMinutes;
+
+            using (new EditorGUI.DisabledScope(!hasRecent || _isImporting || _isFetching))
+            {
+                var label = hasRecent
+                    ? $"⏪ Undo Last Import ({_lastImportedPaths.Count} prefab, {(int)(DateTime.UtcNow - _lastImportAt).TotalMinutes}m ago)"
+                    : "⏪ Undo Last Import";
+                if (GUILayout.Button(label, GUILayout.Height(24)))
+                    UndoLastImport();
+            }
+            EditorGUILayout.Space(8);
+        }
+
+        private void UndoLastImport()
+        {
+            int restored = 0, failed = 0;
+            foreach (var path in _lastImportedPaths)
+            {
+                var snapshots = MergeBackup.ListSnapshots(path);
+                if (snapshots == null || snapshots.Count == 0)
+                {
+                    _logger.Warn($"{path}: no backup to restore.");
+                    failed++;
+                    continue;
+                }
+                // Newest is the one created just before the last import.
+                var newest = snapshots[0];
+                if (MergeBackup.Restore(newest))
+                {
+                    restored++;
+                    _logger.Info($"Restored: {path}");
+                }
+                else
+                {
+                    failed++;
+                    _logger.Error($"Failed to restore: {path}");
+                }
+            }
+            AssetDatabase.Refresh();
+            _logger.Success($"Undo complete: {restored} restored, {failed} failed.");
+            _lastImportedPaths.Clear();
+            _lastImportAt = DateTime.MinValue;
+            Repaint();
+        }
+
         // ─── Log ────────────────────────────────────────
         private void DrawLogSection()
         {
             EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Log", EditorStyles.boldLabel);
-            if (GUILayout.Button("Clear", GUILayout.Width(50))) _logger.Clear();
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Clear", GUILayout.Width(60))) _logger.Clear();
             EditorGUILayout.EndHorizontal();
 
             _logScroll = EditorGUILayout.BeginScrollView(_logScroll, EditorStyles.helpBox, GUILayout.Height(150));
@@ -288,7 +392,14 @@ namespace SoobakFigma2Unity.Editor.Window
             {
                 var pipeline = new ImportPipeline(_logger);
                 await pipeline.RunFromApiAsync(_profile, _token, urlInfo.FileKey, selectedIds, _cts.Token);
-                AsyncHelper.RunOnMainThread(() => { _isImporting = false; Repaint(); });
+                AsyncHelper.RunOnMainThread(() =>
+                {
+                    _lastImportedPaths.Clear();
+                    foreach (var p in pipeline.SavedPrefabPaths) _lastImportedPaths.Add(p);
+                    if (_lastImportedPaths.Count > 0) _lastImportAt = DateTime.UtcNow;
+                    _isImporting = false;
+                    Repaint();
+                });
             }, e => { _logger.Error($"Import failed: {e.Message}"); _isImporting = false; Repaint(); });
         }
     }

@@ -1,4 +1,7 @@
 using System.IO;
+using SoobakFigma2Unity.Editor.Mapping;
+using SoobakFigma2Unity.Editor.Pipeline;
+using SoobakFigma2Unity.Editor.Util;
 using UnityEditor;
 using UnityEngine;
 
@@ -8,7 +11,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
     {
         public static string SaveAsPrefab(GameObject root, string outputDir, string prefabName = null)
         {
-            EnsureDirectoryExists(outputDir);
+            AssetFolderUtil.EnsureFolder(outputDir);
 
             var name = SanitizeName(prefabName ?? root.name);
             var path = Path.Combine(outputDir, $"{name}.prefab");
@@ -20,7 +23,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
 
         public static string SaveOrReplacePrefab(GameObject root, string outputDir, string prefabName = null)
         {
-            EnsureDirectoryExists(outputDir);
+            AssetFolderUtil.EnsureFolder(outputDir);
 
             var name = SanitizeName(prefabName ?? root.name);
             var path = Path.Combine(outputDir, $"{name}.prefab");
@@ -30,31 +33,15 @@ namespace SoobakFigma2Unity.Editor.Prefabs
         }
 
         /// <summary>
-        /// Create the directory on disk AND register it with AssetDatabase
-        /// so Unity recognizes it for asset operations.
+        /// Saves (or replaces) a prefab after attaching a FigmaPrefabManifest populated from
+        /// <paramref name="ctx"/>. Use this for every Figma-originated prefab so non-destructive
+        /// re-import has the identity data it needs.
         /// </summary>
-        private static void EnsureDirectoryExists(string assetPath)
+        public static string SaveOrReplacePrefabWithManifest(
+            GameObject root, string outputDir, string prefabName, ImportContext ctx)
         {
-            // Convert relative asset path to absolute
-            var fullPath = Path.GetFullPath(assetPath);
-
-            if (!Directory.Exists(fullPath))
-                Directory.CreateDirectory(fullPath);
-
-            // Make sure AssetDatabase knows about it by creating folders via API
-            if (!AssetDatabase.IsValidFolder(assetPath))
-            {
-                // Build folder hierarchy: "Assets/UI/Screens" → create "UI" under "Assets", then "Screens" under "Assets/UI"
-                var parts = assetPath.Replace("\\", "/").Split('/');
-                var current = parts[0]; // "Assets"
-                for (int i = 1; i < parts.Length; i++)
-                {
-                    var next = current + "/" + parts[i];
-                    if (!AssetDatabase.IsValidFolder(next))
-                        AssetDatabase.CreateFolder(current, parts[i]);
-                    current = next;
-                }
-            }
+            ManifestBuilder.AttachRootManifest(root, ctx);
+            return SaveOrReplacePrefab(root, outputDir, prefabName);
         }
 
         private static string SanitizeName(string name)

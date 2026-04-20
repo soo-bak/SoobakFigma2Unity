@@ -68,9 +68,6 @@ namespace SoobakFigma2Unity.Editor.Models
         [JsonProperty("componentId")] public string ComponentId;
         [JsonProperty("componentSetId")] public string ComponentSetId;
 
-        // Prototype interactions
-        [JsonProperty("interactions")] public List<FigmaInteraction> Interactions;
-
         // Background (legacy, some files still use this)
         [JsonProperty("backgroundColor")] public FigmaColor BackgroundColor;
 

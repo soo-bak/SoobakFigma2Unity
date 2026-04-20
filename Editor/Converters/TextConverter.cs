@@ -1,7 +1,6 @@
 using SoobakFigma2Unity.Editor.Color;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
-using SoobakFigma2Unity.Runtime;
 using TMPro;
 using UnityEngine;
 
@@ -20,9 +19,7 @@ namespace SoobakFigma2Unity.Editor.Converters
             go.AddComponent<RectTransform>();
             if (parent != null)
                 go.transform.SetParent(parent.transform, false);
-
-            var nodeRef = go.AddComponent<FigmaNodeRef>();
-            nodeRef.FigmaNodeId = node.Id;
+            ctx.NodeIdentities[go.transform] = new ImportContext.NodeIdentityRecord(node.Id, null);
 
             var tmp = go.AddComponent<TextMeshProUGUI>();
             tmp.text = node.Characters ?? "";
@@ -102,6 +99,8 @@ namespace SoobakFigma2Unity.Editor.Converters
                     }
                 }
             }
+
+            BlendModeHelper.TryApplyToText(tmp, node.BlendMode, ctx.Logger);
 
             // Node opacity → CanvasGroup (composes correctly with parent CanvasGroups)
             if (node.Opacity < 1f)

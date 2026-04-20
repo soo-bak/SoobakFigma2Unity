@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using SoobakFigma2Unity.Editor.Converters;
+using SoobakFigma2Unity.Editor.Mapping;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
 using SoobakFigma2Unity.Editor.Util;
@@ -60,7 +61,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             if (variants.Count == 0)
                 return result;
 
-            Directory.CreateDirectory(outputDir);
+            AssetFolderUtil.EnsureFolder(outputDir);
 
             // Parse variant properties: "State=Default, Size=Large" → dictionary
             var parsedVariants = variants
@@ -83,6 +84,8 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             var stateMapper = new SelectableStateMapper(_logger);
             stateMapper.TryApplyStates(baseGo, componentSetNode, variantNodeMap, ctx);
 
+            // Base component prefab owns the manifest; variants inherit it via prefab linkage.
+            ManifestBuilder.AttachRootManifest(baseGo, ctx);
             var basePrefab = PrefabUtility.SaveAsPrefabAsset(baseGo, basePath);
             result[baseVariant.ComponentId] = basePath;
             ctx.GeneratedPrefabs[baseVariant.ComponentId] = basePath;

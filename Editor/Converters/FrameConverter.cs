@@ -3,7 +3,6 @@ using SoobakFigma2Unity.Editor.Color;
 using SoobakFigma2Unity.Editor.Layout;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
-using SoobakFigma2Unity.Runtime;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -28,11 +27,8 @@ namespace SoobakFigma2Unity.Editor.Converters
         public GameObject Convert(FigmaNode node, GameObject parent, ImportContext ctx)
         {
             var go = CreateGameObject(node, parent);
+            ctx.NodeIdentities[go.transform] = new ImportContext.NodeIdentityRecord(node.Id, null);
             var rt = go.GetComponent<RectTransform>();
-
-            // Add FigmaNodeRef for re-import tracking
-            var nodeRef = go.AddComponent<FigmaNodeRef>();
-            nodeRef.FigmaNodeId = node.Id;
 
             // Apply fills
             ApplyFills(go, node, ctx);
@@ -136,6 +132,16 @@ namespace SoobakFigma2Unity.Editor.Converters
                 {
                     var image = go.AddComponent<Image>();
                     image.color = ColorSpaceHelper.Convert(color, fillOpacity);
+                    if (node.CornerRadius > 0)
+                    {
+                        var rounded = RoundedRectSpriteGenerator.GetOrGenerate(
+                            node.CornerRadius, ctx.Profile.ImageScale, ctx.Profile.ImageOutputPath, ctx.Logger);
+                        if (rounded != null)
+                        {
+                            image.sprite = rounded;
+                            image.type = Image.Type.Sliced;
+                        }
+                    }
                     return;
                 }
             }

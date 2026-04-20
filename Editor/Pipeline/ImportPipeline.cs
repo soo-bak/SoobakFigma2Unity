@@ -22,6 +22,10 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         private readonly ImportLogger _logger;
         private readonly NodeConverterRegistry _registry;
 
+        /// <summary>Prefab asset paths written during the current/last Run*Async call. Used by
+        /// the editor window to enable "Undo Last Import".</summary>
+        public List<string> SavedPrefabPaths { get; } = new List<string>();
+
         public ImportPipeline(ImportLogger logger)
         {
             _logger = logger;
@@ -79,7 +83,6 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 GenerateAndConvert(frames, ctx, profile);
                 progress.Step("Done!");
 
-                SaveSnapshot(frames, fileKey, nodesResponse.LastModified, profile);
                 _logger.Success($"Import complete! {frames.Count} prefab(s) created.");
             }
             catch (System.OperationCanceledException) { _logger.Warn("Import cancelled."); }
@@ -127,19 +130,6 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             AssetDatabase.Refresh();
         }
 
-        private void SaveSnapshot(List<FigmaNode> frames, string fileKey, string lastModified, ImportProfile profile)
-        {
-            var snapshot = new ImportSnapshot
-            {
-                FileKey = fileKey,
-                FileVersion = lastModified,
-                LastModified = lastModified,
-                ImageScale = profile.ImageScale
-            };
-            foreach (var f in frames) snapshot.UpdateHashes(f);
-            snapshot.Save(profile.ScreenOutputPath);
-        }
-
         // ─── Frame conversion ───────────────────────────
 
         private void ConvertAndSaveFrame(FigmaNode frameNode, ImportContext ctx, ImportProfile profile)
@@ -152,7 +142,6 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             rootRt.anchorMin = new Vector2(0.5f, 0.5f);
             rootRt.anchorMax = new Vector2(0.5f, 0.5f);
 
-            rootGo.AddComponent<Runtime.FigmaNodeRef>().FigmaNodeId = frameNode.Id;
             ApplyFrameProperties(rootGo, frameNode, ctx);
 
             if (profile.ConvertAutoLayout && frameNode.IsAutoLayout)
@@ -160,20 +149,8 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (frameNode.HasChildren)
                 ConvertChildren(frameNode, rootGo, ctx, profile);
 
-            var outputDir = profile.ScreenOutputPath;
-            string prefabPath;
-            if (profile.PreserveOnReimport)
-            {
-                var existing = MergeStrategy.FindExistingPrefab(frameNode.Id, outputDir);
-                if (existing != null)
-                    prefabPath = new MergeStrategy(_logger).MergeIntoPrefab(rootGo, existing)
-                        ?? PrefabBuilder.SaveOrReplacePrefab(rootGo, outputDir, frameNode.Name);
-                else
-                    prefabPath = PrefabBuilder.SaveOrReplacePrefab(rootGo, outputDir, frameNode.Name);
-            }
-            else
-                prefabPath = PrefabBuilder.SaveOrReplacePrefab(rootGo, outputDir, frameNode.Name);
-
+            var prefabPath = PrefabMerger.MergeOrSave(rootGo, profile.ScreenOutputPath, frameNode.Name, ctx, profile.MergeMode, _logger);
+            if (!string.IsNullOrEmpty(prefabPath)) SavedPrefabPaths.Add(prefabPath);
             _logger.Success($"Saved prefab: {prefabPath}");
             Object.DestroyImmediate(rootGo);
         }
@@ -289,14 +266,12 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     && !isRasterized && !isMaskFrameConsumedChild)
                     ConvertChildren(childNode, childGo, ctx, profile);
 
-                if (childNode.NodeType != FigmaNodeType.TEXT)
-                {
-                    var detector = new NodePurposeDetector(ctx.Logger, ctx.Components);
-                    var purpose = detector.Detect(childNode);
-                    if (purpose != NodePurposeDetector.DetectedPurpose.None)
-                        PurposeApplier.Apply(childGo, childNode, purpose, ctx);
-                }
-                InteractionMapper.Apply(childGo, childNode, ctx);
+                // Wrapper FRAME/INSTANCE with a non-trivial blend mode but no own
+                // Image: cascade the blend approximation onto descendants. (Image-bearing
+                // converters already applied node.BlendMode to themselves.)
+                if (!string.IsNullOrEmpty(childNode.BlendMode)
+                    && childGo.GetComponent<UnityEngine.UI.Image>() == null)
+                    BlendModeHelper.PropagateApproximationToDescendants(childGo, childNode.BlendMode, ctx.Logger);
 
                 // Set up mask wrapper *after* this node is fully processed —
                 // so the mask itself is positioned relative to its real Figma parent
@@ -332,6 +307,16 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                         var img = go.AddComponent<UnityEngine.UI.Image>();
                         // Fill color uses fill.Opacity only; node.Opacity → CanvasGroup below.
                         img.color = Color.ColorSpaceHelper.Convert(color, fillOpacity);
+                        if (node.CornerRadius > 0)
+                        {
+                            var rounded = RoundedRectSpriteGenerator.GetOrGenerate(
+                                node.CornerRadius, ctx.Profile.ImageScale, ctx.Profile.ImageOutputPath, ctx.Logger);
+                            if (rounded != null)
+                            {
+                                img.sprite = rounded;
+                                img.type = UnityEngine.UI.Image.Type.Sliced;
+                            }
+                        }
                     }
                 }
             }
@@ -382,14 +367,20 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             {
                 var vb = new PrefabVariantBuilder(_logger);
                 foreach (var cs in componentSets)
-                    vb.BuildVariantChain(cs, n => ConvertNodeToGameObject(n, ctx, profile), profile.PrefabOutputPath, ctx);
+                {
+                    var chain = vb.BuildVariantChain(cs, n => ConvertNodeToGameObject(n, ctx, profile), profile.PrefabOutputPath, ctx);
+                    if (chain != null)
+                        foreach (var path in chain.Values)
+                            if (!string.IsNullOrEmpty(path)) SavedPrefabPaths.Add(path);
+                }
             }
             foreach (var comp in components)
             {
                 if (ctx.GeneratedPrefabs.ContainsKey(comp.Id)) continue;
                 if (ctx.Components.TryGetValue(comp.Id, out var m) && !string.IsNullOrEmpty(m.ComponentSetId)) continue;
                 var go = ConvertNodeToGameObject(comp, ctx, profile);
-                ctx.GeneratedPrefabs[comp.Id] = PrefabBuilder.SaveOrReplacePrefab(go, profile.PrefabOutputPath, comp.Name);
+                ctx.GeneratedPrefabs[comp.Id] = PrefabMerger.MergeOrSave(go, profile.PrefabOutputPath, comp.Name, ctx, profile.MergeMode, _logger);
+                if (!string.IsNullOrEmpty(ctx.GeneratedPrefabs[comp.Id])) SavedPrefabPaths.Add(ctx.GeneratedPrefabs[comp.Id]);
                 _logger.Success($"Component prefab: {ctx.GeneratedPrefabs[comp.Id]}");
                 Object.DestroyImmediate(go);
             }
@@ -406,7 +397,6 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         {
             var go = new GameObject(node.Name);
             go.AddComponent<RectTransform>().sizeDelta = SizeCalculator.GetSize(node);
-            go.AddComponent<Runtime.FigmaNodeRef>().FigmaNodeId = node.Id;
             ApplyFrameProperties(go, node, ctx);
             if (profile.ConvertAutoLayout && node.IsAutoLayout) AutoLayoutMapper.Apply(go, node);
             bool isRasterized = ctx.NodeSprites.ContainsKey(node.Id);
@@ -494,19 +484,6 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             !n.HasVisibleFills &&
             (n.Effects == null || n.Effects.Count == 0) &&
             !NodeConverterRegistry.IsMaskContainer(n); // preserve mask containers
-
-        private static FigmaNode FindNodeById(FigmaNode root, string nodeId)
-        {
-            if (string.IsNullOrEmpty(nodeId)) return null;
-            if (root.Id == nodeId) return root;
-            if (root.Children != null)
-                foreach (var c in root.Children)
-                {
-                    var found = FindNodeById(c, nodeId);
-                    if (found != null) return found;
-                }
-            return null;
-        }
 
         private static string GetTempImageDir()
         {

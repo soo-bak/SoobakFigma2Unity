@@ -88,14 +88,14 @@ namespace SoobakFigma2Unity.Editor.Converters
                 }
             }
 
-            // Text color from fills
+            // Text color from fills (multiply node.Opacity * fill.Opacity)
             if (node.Fills != null)
             {
                 foreach (var fill in node.Fills)
                 {
                     if (fill.Visible && fill.IsSolid && fill.Color != null)
                     {
-                        tmp.color = ColorSpaceHelper.Convert(fill.Color, node.Opacity);
+                        tmp.color = ColorSpaceHelper.Convert(fill.Color, node.Opacity * fill.Opacity);
                         break;
                     }
                 }

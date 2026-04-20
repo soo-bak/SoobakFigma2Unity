@@ -176,7 +176,7 @@ namespace SoobakFigma2Unity.Editor.Converters
             foreach (var fill in node.Fills)
             {
                 if (fill.Visible && fill.IsSolid && fill.Color != null)
-                    return ColorSpaceHelper.Convert(fill.Color, node.Opacity);
+                    return ColorSpaceHelper.Convert(fill.Color, node.Opacity * fill.Opacity);
             }
             return UnityEngine.Color.white;
         }

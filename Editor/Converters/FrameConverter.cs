@@ -130,11 +130,11 @@ namespace SoobakFigma2Unity.Editor.Converters
             // Solid color optimization (no rasterization needed)
             if (ctx.Profile.SolidColorOptimization && SolidColorOptimizer.CanUseSolidColor(node))
             {
-                var color = SolidColorOptimizer.GetTopSolidColor(node);
+                var (color, fillOpacity) = SolidColorOptimizer.GetTopSolidFill(node);
                 if (color != null)
                 {
                     var image = go.AddComponent<Image>();
-                    image.color = ColorSpaceHelper.Convert(color, node.Opacity);
+                    image.color = ColorSpaceHelper.Convert(color, node.Opacity * fillOpacity);
                     return;
                 }
             }

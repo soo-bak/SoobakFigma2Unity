@@ -117,6 +117,19 @@ namespace SoobakFigma2Unity.Editor.Converters
             if (t == FigmaNodeType.RECTANGLE && node.HasVisibleFills && node.CornerRadius > 0)
                 return true;
 
+            // Visible stroke (border) → rasterize. Unity Image cannot draw strokes
+            // natively. Without this rule, nodes with strokes but no other rasterization
+            // trigger (gradient/effect/cornerRadius/etc.) lose their borders entirely
+            // (SolidColorOptimizer also rejects them, leaving no Image at all).
+            if (node.StrokeWeight > 0 && node.Strokes != null)
+            {
+                foreach (var stroke in node.Strokes)
+                {
+                    if (stroke.Visible && stroke.Opacity > 0f)
+                        return true;
+                }
+            }
+
             // Nodes with visible image fills → rasterize to capture correct crop/stretch
             if (node.Fills != null)
             {

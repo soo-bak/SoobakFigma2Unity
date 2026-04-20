@@ -94,5 +94,26 @@ namespace SoobakFigma2Unity.Editor.Assets
             }
             return topColor;
         }
+
+        /// <summary>
+        /// Get the topmost visible solid fill's color AND its per-fill opacity.
+        /// Multiply the returned opacity with node.Opacity to get the final alpha.
+        /// </summary>
+        public static (FigmaColor color, float opacity) GetTopSolidFill(FigmaNode node)
+        {
+            if (node.Fills == null) return (null, 1f);
+
+            FigmaColor topColor = null;
+            float topOpacity = 1f;
+            foreach (var fill in node.Fills)
+            {
+                if (fill.Visible && fill.Opacity > 0f && fill.IsSolid && fill.Color != null)
+                {
+                    topColor = fill.Color;
+                    topOpacity = fill.Opacity;
+                }
+            }
+            return (topColor, topOpacity);
+        }
     }
 }

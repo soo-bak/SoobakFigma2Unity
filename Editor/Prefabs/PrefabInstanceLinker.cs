@@ -95,7 +95,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                     {
                         if (fill.Visible && fill.IsSolid && fill.Color != null)
                         {
-                            image.color = ColorSpaceHelper.Convert(fill.Color, instanceNode.Opacity);
+                            image.color = ColorSpaceHelper.Convert(fill.Color, instanceNode.Opacity * fill.Opacity);
                             break;
                         }
                     }
@@ -136,7 +136,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                             {
                                 if (fill.Visible && fill.IsSolid && fill.Color != null)
                                 {
-                                    tmp.color = ColorSpaceHelper.Convert(fill.Color);
+                                    tmp.color = ColorSpaceHelper.Convert(fill.Color, childNode.Opacity * fill.Opacity);
                                     break;
                                 }
                             }
@@ -152,7 +152,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                     {
                         if (fill.Visible && fill.IsSolid && fill.Color != null)
                         {
-                            image.color = ColorSpaceHelper.Convert(fill.Color);
+                            image.color = ColorSpaceHelper.Convert(fill.Color, childNode.Opacity * fill.Opacity);
                             break;
                         }
 

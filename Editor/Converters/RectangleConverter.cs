@@ -40,9 +40,9 @@ namespace SoobakFigma2Unity.Editor.Converters
             // 2) Solid color optimization
             else if (ctx.Profile.SolidColorOptimization && SolidColorOptimizer.CanUseSolidColor(node))
             {
-                var color = SolidColorOptimizer.GetTopSolidColor(node);
+                var (color, fillOpacity) = SolidColorOptimizer.GetTopSolidFill(node);
                 if (color != null)
-                    chosenColor = ColorSpaceHelper.Convert(color, node.Opacity);
+                    chosenColor = ColorSpaceHelper.Convert(color, node.Opacity * fillOpacity);
             }
             // 3) Raw image fill (uncropped — fallback when node wasn't rasterized)
             else if (node.Fills != null)

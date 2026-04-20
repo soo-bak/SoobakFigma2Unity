@@ -42,8 +42,41 @@ namespace SoobakFigma2Unity.Editor.Converters
             if (image_ != null && !string.IsNullOrEmpty(node.BlendMode))
                 BlendModeHelper.TryApply(image_, node.BlendMode, ctx.Logger);
 
-            // Clips content → Mask (clips children to this frame's bounds)
-            if (node.ClipsContent)
+            // isMask FRAME: this defines a sibling-style mask in Figma.
+            // ConvertChildren reparents subsequent siblings under this GameObject;
+            // Unity's Mask component then clips them to this frame's alpha shape.
+            // The mask shape sprite is taken from this node's own rasterization,
+            // or from a child vector's sprite (typical: bubble_mask FRAME with VECTOR child).
+            if (node.IsMask)
+            {
+                var image = go.GetComponent<Image>();
+                if (image == null)
+                {
+                    image = go.AddComponent<Image>();
+                    Sprite shapeSprite = null;
+                    if (ctx.NodeSprites.TryGetValue(node.Id, out var ownSprite))
+                        shapeSprite = ownSprite;
+                    else if (node.Children != null)
+                    {
+                        foreach (var ch in node.Children)
+                        {
+                            if (ctx.NodeSprites.TryGetValue(ch.Id, out var childSprite))
+                            {
+                                shapeSprite = childSprite;
+                                break;
+                            }
+                        }
+                    }
+                    if (shapeSprite != null)
+                        image.sprite = shapeSprite;
+                    else
+                        image.color = UnityEngine.Color.white;
+                }
+                var mask = go.AddComponent<Mask>();
+                mask.showMaskGraphic = false; // mask shape is invisible; only its alpha clips children
+            }
+            // Clips content → Mask (clips own children to this frame's bounds)
+            else if (node.ClipsContent)
             {
                 var image = go.GetComponent<Image>();
                 if (image == null)

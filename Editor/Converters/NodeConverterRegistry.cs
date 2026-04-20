@@ -112,16 +112,11 @@ namespace SoobakFigma2Unity.Editor.Converters
                 }
             }
 
-            // Nodes containing isMask children → rasterize the whole composition
-            // (e.g., speechbubble with mask shape + emoji content)
-            if (node.Children != null)
-            {
-                foreach (var child in node.Children)
-                {
-                    if (child.IsMask)
-                        return true;
-                }
-            }
+            // NOTE: We do NOT rasterize parents containing isMask children.
+            // Instead, ImportPipeline.ConvertChildren restructures the hierarchy:
+            // the isMask sibling becomes a Unity Mask wrapper, and subsequent siblings
+            // are reparented under it. This preserves Figma structure for runtime
+            // sprite swapping (e.g., speechbubble emoji variants).
 
             return false;
         }

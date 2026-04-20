@@ -184,9 +184,15 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         {
             if (parentNode.Children == null) return;
 
-            for (int i = 0; i < parentNode.Children.Count; i++)
+            // Mask redirection state — scoped to this child loop only.
+            // When we encounter an isMask sibling, subsequent siblings get reparented
+            // under it so Unity's parent-child Mask correctly clips them.
+            GameObject currentMaskGo = null;
+            FigmaNode currentMaskNode = null;
+            bool parentIsAutoLayout = parentNode.IsAutoLayout;
+
+            foreach (var childNode in parentNode.Children)
             {
-                var childNode = parentNode.Children[i];
                 if (NodeConverterRegistry.ShouldSkip(childNode)) continue;
                 if (profile.FlattenEmptyGroups && IsEmptyGroup(childNode))
                 { ConvertChildren(childNode, parentGo, ctx, profile); continue; }
@@ -194,10 +200,17 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 var converter = _registry.GetConverter(childNode);
                 if (converter == null) { ctx.Logger.Warn($"No converter for '{childNode.Type}': {childNode.Name}"); continue; }
 
+                bool isMaskNode = childNode.IsMask;
+                // In auto-layout containers, mask redirection conflicts with LayoutGroup.
+                bool redirectIntoMask = !parentIsAutoLayout && currentMaskGo != null && !isMaskNode;
+
+                GameObject targetParentGo = redirectIntoMask ? currentMaskGo : parentGo;
+                FigmaNode posParentNode = redirectIntoMask ? currentMaskNode : parentNode;
+
                 GameObject childGo;
                 try
                 {
-                    childGo = converter.Convert(childNode, parentGo, ctx);
+                    childGo = converter.Convert(childNode, targetParentGo, ctx);
                 }
                 catch (System.Exception e)
                 {
@@ -209,13 +222,14 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 var rt = childGo.GetComponent<RectTransform>();
                 if (rt == null) continue;
 
-                if (parentNode.IsAutoLayout && !childNode.IsAbsolutePositioned)
+                // Position relative to the *logical* parent (mask node when redirected, else real parent)
+                if (!redirectIntoMask && parentNode.IsAutoLayout && !childNode.IsAbsolutePositioned)
                 { if (profile.ConvertAutoLayout) AutoLayoutMapper.ApplyChildLayoutProperties(childGo, childNode, parentNode); }
                 else if (profile.ApplyConstraints)
-                    AnchorMapper.Apply(rt, childNode, parentNode);
+                    AnchorMapper.Apply(rt, childNode, posParentNode);
                 else
                 {
-                    var relPos = SizeCalculator.GetRelativePosition(childNode, parentNode);
+                    var relPos = SizeCalculator.GetRelativePosition(childNode, posParentNode);
                     var childSize = SizeCalculator.GetSize(childNode);
                     rt.pivot = new Vector2(0.5f, 0.5f);
                     rt.anchorMin = new Vector2(0f, 1f);
@@ -227,8 +241,18 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 if (profile.ConvertAutoLayout && childNode.IsAutoLayout)
                     AutoLayoutMapper.Apply(childGo, childNode);
 
+                // Recurse into children — but skip if rasterized OR if isMask FRAME already
+                // consumed a child vector's sprite (avoid duplicate visual).
                 bool isRasterized = ctx.NodeSprites.ContainsKey(childNode.Id);
-                if (childNode.HasChildren && childNode.NodeType != FigmaNodeType.TEXT && !isRasterized)
+                bool isMaskFrameConsumedChild =
+                    isMaskNode &&
+                    childNode.NodeType == FigmaNodeType.FRAME &&
+                    childGo.GetComponent<UnityEngine.UI.Image>() != null &&
+                    childGo.GetComponent<UnityEngine.UI.Image>().sprite != null &&
+                    !ctx.NodeSprites.ContainsKey(childNode.Id);
+
+                if (childNode.HasChildren && childNode.NodeType != FigmaNodeType.TEXT
+                    && !isRasterized && !isMaskFrameConsumedChild)
                     ConvertChildren(childNode, childGo, ctx, profile);
 
                 if (childNode.NodeType != FigmaNodeType.TEXT)
@@ -239,6 +263,15 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                         PurposeApplier.Apply(childGo, childNode, purpose, ctx);
                 }
                 InteractionMapper.Apply(childGo, childNode, ctx);
+
+                // Set up mask wrapper *after* this node is fully processed —
+                // so the mask itself is positioned relative to its real Figma parent.
+                if (isMaskNode && !parentIsAutoLayout)
+                {
+                    currentMaskGo = childGo;
+                    currentMaskNode = childNode;
+                    ctx.Logger.Info($"Mask wrapper: '{childNode.Name}' will clip subsequent siblings");
+                }
             }
         }
 
@@ -265,7 +298,30 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                         ? UnityEngine.UI.Image.Type.Sliced : UnityEngine.UI.Image.Type.Simple;
                 }
             }
-            if (node.ClipsContent)
+            // isMask precedence (matches FrameConverter behavior)
+            if (node.IsMask)
+            {
+                var img = go.GetComponent<UnityEngine.UI.Image>();
+                if (img == null)
+                {
+                    img = go.AddComponent<UnityEngine.UI.Image>();
+                    Sprite shapeSprite = null;
+                    if (ctx.NodeSprites.TryGetValue(node.Id, out var ownSprite))
+                        shapeSprite = ownSprite;
+                    else if (node.Children != null)
+                    {
+                        foreach (var ch in node.Children)
+                        {
+                            if (ctx.NodeSprites.TryGetValue(ch.Id, out var childSprite))
+                            { shapeSprite = childSprite; break; }
+                        }
+                    }
+                    if (shapeSprite != null) img.sprite = shapeSprite;
+                    else img.color = UnityEngine.Color.white;
+                }
+                go.AddComponent<UnityEngine.UI.Mask>().showMaskGraphic = false;
+            }
+            else if (node.ClipsContent)
             {
                 var img = go.GetComponent<UnityEngine.UI.Image>()
                     ?? go.AddComponent<UnityEngine.UI.Image>();
@@ -397,7 +453,10 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         }
 
         private static bool IsEmptyGroup(FigmaNode n) =>
-            n.NodeType == FigmaNodeType.GROUP && !n.HasVisibleFills && (n.Effects == null || n.Effects.Count == 0);
+            n.NodeType == FigmaNodeType.GROUP &&
+            !n.HasVisibleFills &&
+            (n.Effects == null || n.Effects.Count == 0) &&
+            !NodeConverterRegistry.IsMaskContainer(n); // preserve mask containers
 
         private static FigmaNode FindNodeById(FigmaNode root, string nodeId)
         {

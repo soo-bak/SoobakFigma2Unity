@@ -57,7 +57,6 @@ namespace SoobakFigma2Unity.Editor.Converters
                     maskInfo.IsBooleanOperation = true;
                     maskInfo.BooleanOperation = node.Type;
 
-                    // Store child node IDs for reference
                     if (node.Children != null)
                     {
                         var ids = new string[node.Children.Count];
@@ -68,6 +67,20 @@ namespace SoobakFigma2Unity.Editor.Converters
 
                     ctx.Logger.Info($"{node.Name}: boolean operation '{node.Type}' rasterized (metadata preserved)");
                 }
+            }
+
+            // isMask vector: add Unity Mask so reparented siblings are clipped to this shape.
+            // ImportPipeline.ConvertChildren handles the sibling reparenting.
+            if (node.IsMask)
+            {
+                var maskImg = go.GetComponent<Image>();
+                if (maskImg == null)
+                {
+                    maskImg = go.AddComponent<Image>();
+                    maskImg.color = UnityEngine.Color.white;
+                }
+                var mask = go.AddComponent<Mask>();
+                mask.showMaskGraphic = false;
             }
 
             // Blend mode

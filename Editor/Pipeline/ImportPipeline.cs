@@ -350,7 +350,11 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 if (img.sprite == null) img.color = UnityEngine.Color.white;
                 go.AddComponent<UnityEngine.UI.Mask>().showMaskGraphic = img.sprite != null;
             }
-            if (node.Opacity < 1f)
+            // Skip CanvasGroup when a rasterized sprite is the visual — the PNG already
+            // has node.opacity baked into its alpha channel, so applying it again here
+            // would multiply opacity twice (e.g. 0.4 × 0.4 = 0.16, almost invisible).
+            bool spriteIsRasterized = ctx.NodeSprites.ContainsKey(node.Id);
+            if (node.Opacity < 1f && !spriteIsRasterized)
                 go.AddComponent<CanvasGroup>().alpha = node.Opacity;
         }
 

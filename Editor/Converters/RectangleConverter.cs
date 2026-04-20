@@ -28,11 +28,13 @@ namespace SoobakFigma2Unity.Editor.Converters
             // Decide visual content (don't add Image until we have something to show)
             Sprite chosenSprite = null;
             UnityEngine.Color? chosenColor = null;
+            bool spriteIsRasterized = false;
 
             // 1) Rasterized sprite (vector op, image-fill cropped, etc.)
             if (ctx.NodeSprites.TryGetValue(node.Id, out var nodeSprite))
             {
                 chosenSprite = nodeSprite;
+                spriteIsRasterized = true;
             }
             // 2) Solid color optimization — color uses only fill's own alpha+opacity.
             //    node.Opacity is applied via CanvasGroup below for consistency.
@@ -86,9 +88,13 @@ namespace SoobakFigma2Unity.Editor.Converters
                 BlendModeHelper.TryApply(image, node.BlendMode, ctx.Logger);
             }
 
-            // Node opacity → CanvasGroup (composes with parent CanvasGroups,
-            // consistent with FrameConverter/VectorConverter/TextConverter).
-            if (node.Opacity < 1f)
+            // Node opacity → CanvasGroup.
+            // SKIP when the displayed sprite was rasterized by Figma's /v1/images API:
+            // that PNG already has node.opacity baked into its alpha channel (verified
+            // empirically — an opacity=0.4 node with a fill.opacity=0.2 lands as alpha
+            // 20/255 ≈ 0.08 in the exported PNG, exactly 0.4 × 0.2). Applying the
+            // CanvasGroup on top would multiply opacity twice and wash the node out.
+            if (node.Opacity < 1f && !spriteIsRasterized)
             {
                 var canvasGroup = go.AddComponent<CanvasGroup>();
                 canvasGroup.alpha = node.Opacity;

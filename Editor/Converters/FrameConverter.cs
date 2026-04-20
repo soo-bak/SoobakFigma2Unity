@@ -83,8 +83,11 @@ namespace SoobakFigma2Unity.Editor.Converters
                 go.AddComponent<Mask>().showMaskGraphic = image.sprite != null;
             }
 
-            // Opacity
-            if (node.Opacity < 1f)
+            // Opacity. Skip when ApplyFills picked a rasterized sprite (NodeSprites): that
+            // PNG already carries node.opacity baked in, so a CanvasGroup on top would
+            // multiply opacity twice and the frame becomes much fainter than in Figma.
+            bool spriteIsRasterized = ctx.NodeSprites.ContainsKey(node.Id);
+            if (node.Opacity < 1f && !spriteIsRasterized)
             {
                 var canvasGroup = go.AddComponent<CanvasGroup>();
                 canvasGroup.alpha = node.Opacity;

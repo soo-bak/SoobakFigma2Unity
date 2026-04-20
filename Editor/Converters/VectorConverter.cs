@@ -86,8 +86,10 @@ namespace SoobakFigma2Unity.Editor.Converters
             if (img != null && !string.IsNullOrEmpty(node.BlendMode))
                 BlendModeHelper.TryApply(img, node.BlendMode, ctx.Logger);
 
-            // Opacity
-            if (node.Opacity < 1f)
+            // Opacity. Skip when the PNG is already carrying node.opacity in its alpha
+            // channel (Figma's /v1/images bakes node.opacity into the exported alpha).
+            bool spriteIsRasterized = ctx.NodeSprites.ContainsKey(node.Id);
+            if (node.Opacity < 1f && !spriteIsRasterized)
             {
                 var canvasGroup = go.AddComponent<CanvasGroup>();
                 canvasGroup.alpha = node.Opacity;

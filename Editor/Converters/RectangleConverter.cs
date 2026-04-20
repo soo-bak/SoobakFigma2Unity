@@ -87,6 +87,23 @@ namespace SoobakFigma2Unity.Editor.Converters
             if (node.CornerRadius > 0)
                 ctx.Logger.Info($"{node.Name}: cornerRadius={node.CornerRadius}px (9-slice candidate)");
 
+            // isMask RECTANGLE: in Figma the mask shape itself is invisible — it only
+            // defines the clipping alpha for subsequent siblings. Add Unity Mask with
+            // showMaskGraphic=false so the rectangle is hidden but its alpha clips
+            // children that ConvertChildren reparents under it.
+            if (node.IsMask)
+            {
+                var maskImage = go.GetComponent<Image>();
+                if (maskImage == null)
+                {
+                    // No image was added (e.g., not rasterized) — use solid white as alpha source
+                    maskImage = go.AddComponent<Image>();
+                    maskImage.color = UnityEngine.Color.white;
+                }
+                if (go.GetComponent<Mask>() == null)
+                    go.AddComponent<Mask>().showMaskGraphic = false;
+            }
+
             return go;
         }
     }

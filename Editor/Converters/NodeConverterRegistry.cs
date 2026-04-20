@@ -108,6 +108,15 @@ namespace SoobakFigma2Unity.Editor.Converters
                     return true;
             }
 
+            // Uniform corner radius + visible fills on RECTANGLE → rasterize.
+            // Unity Image cannot render rounded corners natively without a sprite asset,
+            // so we bake the rounded shape into a PNG. NineSliceDetector then sets sprite
+            // borders so the rounded corners scale correctly with RT size.
+            // (Without this rule, solid-filled rounded rectangles like button backgrounds
+            //  end up with no Image at all because SolidColorOptimizer rejects them.)
+            if (t == FigmaNodeType.RECTANGLE && node.HasVisibleFills && node.CornerRadius > 0)
+                return true;
+
             // Nodes with visible image fills → rasterize to capture correct crop/stretch
             if (node.Fills != null)
             {

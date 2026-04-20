@@ -48,23 +48,6 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         /// <summary>All image fill refs that need downloading.</summary>
         public HashSet<string> ImageFillRefs { get; set; } = new HashSet<string>();
 
-        /// <summary>
-        /// Maps a chroma-blend node's ID (COLOR/HUE/SATURATION/etc.) to the parent whose
-        /// rasterisation contains the correctly-composited blend result. After images are
-        /// downloaded we crop the parent's PNG to this child's area and use the crop as
-        /// the child's sprite — UGUI can't reach the destination pixel to blend itself,
-        /// so we let Figma bake the blend for us.
-        /// </summary>
-        public Dictionary<string, string> CompositeCropMap { get; set; } = new Dictionary<string, string>();
-
-        /// <summary>
-        /// Parents added to the image download list solely to serve <see cref="CompositeCropMap"/>.
-        /// They are NOT meant to become sprites themselves (their converters should run the
-        /// normal hierarchical path). We use this set to discard the parent PNGs after
-        /// cropping so they don't end up in <see cref="NodeSprites"/>.
-        /// </summary>
-        public HashSet<string> CompositeCropParents { get; set; } = new HashSet<string>();
-
         /// <summary>Index of all nodes by ID (for lookups during image import).</summary>
         public Dictionary<string, FigmaNode> NodeIndex { get; set; } = new Dictionary<string, FigmaNode>();
 

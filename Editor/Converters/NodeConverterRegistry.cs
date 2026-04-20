@@ -112,6 +112,17 @@ namespace SoobakFigma2Unity.Editor.Converters
                 }
             }
 
+            // isMask FRAME nodes need their own rasterization to get an exact-size
+            // mask shape sprite (matches the FRAME's RectTransform with clipsContent
+            // applied). Using a child VECTOR's sprite would cause aspect-ratio
+            // distortion since vector bbox often differs from the FRAME bbox.
+            // (Vector-type isMask is already handled by the vector-types rule above.)
+            if (node.IsMask &&
+                (node.NodeType == FigmaNodeType.FRAME ||
+                 node.NodeType == FigmaNodeType.GROUP ||
+                 node.NodeType == FigmaNodeType.RECTANGLE))
+                return true;
+
             // NOTE: We do NOT rasterize parents containing isMask children.
             // Instead, ImportPipeline.ConvertChildren restructures the hierarchy:
             // the isMask sibling becomes a Unity Mask wrapper, and subsequent siblings

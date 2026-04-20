@@ -53,9 +53,13 @@ namespace SoobakFigma2Unity.Editor.Layout
                 layoutGroup.childForceExpandHeight = spaceAlong;
             }
 
-            // Let LayoutGroup control size
-            layoutGroup.childControlWidth = true;
-            layoutGroup.childControlHeight = true;
+            // IMPORTANT: childControl must be FALSE to prevent LayoutGroup from
+            // overriding child sizeDelta. Unity rebuilds layout when LayoutElement
+            // is added with default values (preferredSize=-1), causing sizeDelta
+            // to become (0,0) before our preferredWidth/Height values are set.
+            // Children manage their own sizeDelta via ApplyChildLayoutProperties.
+            layoutGroup.childControlWidth = false;
+            layoutGroup.childControlHeight = false;
             layoutGroup.childScaleWidth = false;
             layoutGroup.childScaleHeight = false;
 

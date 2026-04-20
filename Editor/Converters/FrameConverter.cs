@@ -110,10 +110,24 @@ namespace SoobakFigma2Unity.Editor.Converters
 
         private void ApplyFills(GameObject go, FigmaNode node, ImportContext ctx)
         {
+            // Check rasterized sprite FIRST — even if no visible fills, the node
+            // may have been rasterized for effects/shadows/masks/etc. We must apply
+            // the sprite or the node will appear empty (e.g., Frame 3845 with shadow).
+            if (ctx.NodeSprites.TryGetValue(node.Id, out var sprite))
+            {
+                var image = go.AddComponent<Image>();
+                image.sprite = sprite;
+                image.type = (sprite.border != UnityEngine.Vector4.zero)
+                    ? Image.Type.Sliced
+                    : Image.Type.Simple;
+                image.preserveAspect = false;
+                return;
+            }
+
             if (!node.HasVisibleFills)
                 return;
 
-            // Check if we can use solid color optimization
+            // Solid color optimization (no rasterization needed)
             if (ctx.Profile.SolidColorOptimization && SolidColorOptimizer.CanUseSolidColor(node))
             {
                 var color = SolidColorOptimizer.GetTopSolidColor(node);
@@ -125,20 +139,7 @@ namespace SoobakFigma2Unity.Editor.Converters
                 }
             }
 
-            // Check for rasterized image
-            if (ctx.NodeSprites.TryGetValue(node.Id, out var sprite))
-            {
-                var image = go.AddComponent<Image>();
-                image.sprite = sprite;
-                // Use Sliced if sprite has borders (9-slice)
-                image.type = (sprite.border != UnityEngine.Vector4.zero)
-                    ? Image.Type.Sliced
-                    : Image.Type.Simple;
-                image.preserveAspect = false;
-                return;
-            }
-
-            // Check for image fill
+            // Image fill (raw, uncropped — only when node itself wasn't rasterized)
             if (node.Fills != null)
             {
                 foreach (var fill in node.Fills)

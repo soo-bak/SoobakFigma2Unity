@@ -279,7 +279,15 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
         private void ApplyFrameProperties(GameObject go, FigmaNode node, ImportContext ctx)
         {
-            if (node.HasVisibleFills)
+            // Apply rasterized sprite first (handles effects/shadows even without visible fills)
+            if (ctx.NodeSprites.TryGetValue(node.Id, out var sprite))
+            {
+                var img = go.AddComponent<UnityEngine.UI.Image>();
+                img.sprite = sprite;
+                img.type = sprite.border != Vector4.zero
+                    ? UnityEngine.UI.Image.Type.Sliced : UnityEngine.UI.Image.Type.Simple;
+            }
+            else if (node.HasVisibleFills)
             {
                 if (ctx.Profile.SolidColorOptimization && SolidColorOptimizer.CanUseSolidColor(node))
                 {
@@ -289,13 +297,6 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                         var img = go.AddComponent<UnityEngine.UI.Image>();
                         img.color = Color.ColorSpaceHelper.Convert(color, node.Opacity);
                     }
-                }
-                else if (ctx.NodeSprites.TryGetValue(node.Id, out var sprite))
-                {
-                    var img = go.AddComponent<UnityEngine.UI.Image>();
-                    img.sprite = sprite;
-                    img.type = sprite.border != Vector4.zero
-                        ? UnityEngine.UI.Image.Type.Sliced : UnityEngine.UI.Image.Type.Simple;
                 }
             }
             // isMask precedence (matches FrameConverter behavior)

@@ -1,6 +1,8 @@
 using System.Collections.Generic;
+using System.IO;
 using SoobakFigma2Unity.Editor.Util;
 using TMPro;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -55,15 +57,17 @@ namespace SoobakFigma2Unity.Editor.Converters
 
             if (ShaderMap.TryGetValue(figmaBlendMode, out var shaderName))
             {
-                var shader = Shader.Find(shaderName);
-                if (shader != null)
+                var mat = GetOrCreateSharedMaterial(shaderName);
+                if (mat != null)
                 {
-                    image.material = new Material(shader);
+                    image.material = mat;
                     logger?.Info($"{image.gameObject.name}: blend mode '{figmaBlendMode}' applied via shader");
                     return true;
                 }
                 logger?.Warn($"{image.gameObject.name}: shader '{shaderName}' not found for blend mode '{figmaBlendMode}'");
-                return false;
+                // Intentional fall-through to the ChromaBlendModes fallback below so a
+                // missing shader still produces a sensible result (hide / semi-transparent)
+                // instead of an opaque solid cover.
             }
 
             if (ChromaBlendModes.Contains(figmaBlendMode))
@@ -164,6 +168,50 @@ namespace SoobakFigma2Unity.Editor.Converters
             // Rec.601 luma — same weighting Figma uses for color → grayscale.
             float l = 0.299f * c.r + 0.587f * c.g + 0.114f * c.b;
             return new UnityEngine.Color(l, l, l, c.a);
+        }
+
+        // A freshly-created Material (new Material(shader)) is an in-memory object with no
+        // project GUID. When a prefab referencing it is saved, Unity can't round-trip that
+        // reference — the serialised field resets to {fileID: 0} and the Image renders as
+        // plain Normal again. So every blend shader is persisted as a single shared
+        // Material asset under Assets/Soobak/Materials/ and referenced by all Images that
+        // need it.
+        private const string MaterialFolder = "Assets/Soobak/Materials";
+        private static readonly Dictionary<string, Material> _materialCache = new Dictionary<string, Material>();
+
+        private static Material GetOrCreateSharedMaterial(string shaderName)
+        {
+            if (string.IsNullOrEmpty(shaderName)) return null;
+
+            if (_materialCache.TryGetValue(shaderName, out var cached) && cached != null)
+                return cached;
+
+            var assetPath = $"{MaterialFolder}/{SanitizeShaderName(shaderName)}.mat";
+
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(assetPath);
+            if (mat != null)
+            {
+                _materialCache[shaderName] = mat;
+                return mat;
+            }
+
+            var shader = Shader.Find(shaderName);
+            if (shader == null) return null;
+
+            AssetFolderUtil.EnsureFolder(MaterialFolder);
+            mat = new Material(shader) { name = Path.GetFileNameWithoutExtension(assetPath) };
+            AssetDatabase.CreateAsset(mat, assetPath);
+            AssetDatabase.SaveAssets();
+            _materialCache[shaderName] = mat;
+            return mat;
+        }
+
+        private static string SanitizeShaderName(string name)
+        {
+            // "SoobakFigma2Unity/UI/ColorBlend" -> "SoobakFigma2Unity_UI_ColorBlend"
+            var sb = new System.Text.StringBuilder(name.Length);
+            foreach (var c in name) sb.Append(c == '/' || c == '\\' ? '_' : c);
+            return sb.ToString();
         }
     }
 }

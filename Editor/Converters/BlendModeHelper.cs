@@ -17,6 +17,11 @@ namespace SoobakFigma2Unity.Editor.Converters
             { "MULTIPLY", "SoobakFigma2Unity/UI/Multiply" },
             { "SCREEN", "SoobakFigma2Unity/UI/Screen" },
             { "OVERLAY", "SoobakFigma2Unity/UI/Overlay" },
+            // COLOR uses a GrabPass HSL-blend shader (Runtime/Shaders/UIBlendColor.shader)
+            // that samples the destination pixel and outputs HSL(src.h, src.s, dst.l).
+            // That's the only way stock UGUI can reproduce Figma's destination-dependent
+            // chroma blends — and it's the shader the user explicitly opted in to.
+            { "COLOR", "SoobakFigma2Unity/UI/ColorBlend" },
         };
 
         // Blend modes whose result depends on the destination's HSL (chroma/luma

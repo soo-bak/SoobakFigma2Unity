@@ -212,8 +212,12 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 if (converter == null) { ctx.Logger.Warn($"No converter for '{childNode.Type}': {childNode.Name}"); continue; }
 
                 bool isMaskNode = childNode.IsMask;
-                // In auto-layout containers, mask redirection conflicts with LayoutGroup.
-                bool redirectIntoMask = !parentIsAutoLayout && currentMaskGo != null && !isMaskNode;
+                // Mask redirection: subsequent siblings become children of the mask node.
+                // Works in both regular and auto-layout containers — when reparented under
+                // the mask, children are no longer direct children of the auto-layout parent,
+                // so LayoutGroup naturally stops managing them. Position calc uses the mask
+                // node as reference (posParentNode below).
+                bool redirectIntoMask = currentMaskGo != null && !isMaskNode;
 
                 GameObject targetParentGo = redirectIntoMask ? currentMaskGo : parentGo;
                 FigmaNode posParentNode = redirectIntoMask ? currentMaskNode : visualParent;
@@ -295,8 +299,9 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 InteractionMapper.Apply(childGo, childNode, ctx);
 
                 // Set up mask wrapper *after* this node is fully processed —
-                // so the mask itself is positioned relative to its real Figma parent.
-                if (isMaskNode && !parentIsAutoLayout)
+                // so the mask itself is positioned relative to its real Figma parent
+                // (auto-layout flow positions it; constraint anchoring otherwise).
+                if (isMaskNode)
                 {
                     currentMaskGo = childGo;
                     currentMaskNode = childNode;
@@ -325,7 +330,8 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     if (color != null)
                     {
                         var img = go.AddComponent<UnityEngine.UI.Image>();
-                        img.color = Color.ColorSpaceHelper.Convert(color, node.Opacity * fillOpacity);
+                        // Fill color uses fill.Opacity only; node.Opacity → CanvasGroup below.
+                        img.color = Color.ColorSpaceHelper.Convert(color, fillOpacity);
                     }
                 }
             }

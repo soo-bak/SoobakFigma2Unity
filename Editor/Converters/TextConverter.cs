@@ -88,25 +88,26 @@ namespace SoobakFigma2Unity.Editor.Converters
                 }
             }
 
-            // Text color from fills (multiply node.Opacity * fill.Opacity)
+            // Text color from fills — use only fill's own alpha+opacity here.
+            // node.Opacity is applied via CanvasGroup below for consistency with
+            // FrameConverter/VectorConverter (avoids double-multiplication).
             if (node.Fills != null)
             {
                 foreach (var fill in node.Fills)
                 {
                     if (fill.Visible && fill.IsSolid && fill.Color != null)
                     {
-                        tmp.color = ColorSpaceHelper.Convert(fill.Color, node.Opacity * fill.Opacity);
+                        tmp.color = ColorSpaceHelper.Convert(fill.Color, fill.Opacity);
                         break;
                     }
                 }
             }
 
-            // Opacity
+            // Node opacity → CanvasGroup (composes correctly with parent CanvasGroups)
             if (node.Opacity < 1f)
             {
-                var c = tmp.color;
-                c.a *= node.Opacity;
-                tmp.color = c;
+                var canvasGroup = go.AddComponent<CanvasGroup>();
+                canvasGroup.alpha = node.Opacity;
             }
 
             return go;

@@ -37,12 +37,13 @@ namespace SoobakFigma2Unity.Editor.Converters
             {
                 chosenSprite = nodeSprite;
             }
-            // 2) Solid color optimization
+            // 2) Solid color optimization — color uses only fill's own alpha+opacity.
+            //    node.Opacity is applied via CanvasGroup below for consistency.
             else if (ctx.Profile.SolidColorOptimization && SolidColorOptimizer.CanUseSolidColor(node))
             {
                 var (color, fillOpacity) = SolidColorOptimizer.GetTopSolidFill(node);
                 if (color != null)
-                    chosenColor = ColorSpaceHelper.Convert(color, node.Opacity * fillOpacity);
+                    chosenColor = ColorSpaceHelper.Convert(color, fillOpacity);
             }
             // 3) Raw image fill (uncropped — fallback when node wasn't rasterized)
             else if (node.Fills != null)
@@ -74,14 +75,14 @@ namespace SoobakFigma2Unity.Editor.Converters
                 {
                     image.color = chosenColor.Value;
                 }
+            }
 
-                // Opacity adjustment
-                if (node.Opacity < 1f && image.color.a >= 1f)
-                {
-                    var c = image.color;
-                    c.a = node.Opacity;
-                    image.color = c;
-                }
+            // Node opacity → CanvasGroup (composes with parent CanvasGroups,
+            // consistent with FrameConverter/VectorConverter/TextConverter).
+            if (node.Opacity < 1f)
+            {
+                var canvasGroup = go.AddComponent<CanvasGroup>();
+                canvasGroup.alpha = node.Opacity;
             }
 
             if (node.CornerRadius > 0)

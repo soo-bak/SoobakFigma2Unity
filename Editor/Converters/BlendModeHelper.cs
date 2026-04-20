@@ -19,6 +19,15 @@ namespace SoobakFigma2Unity.Editor.Converters
             { "OVERLAY", "SoobakFigma2Unity/UI/Overlay" },
         };
 
+        // Blend modes whose result depends on the destination's HSL (chroma/luma
+        // redistribution). UGUI's default material can't reach the destination pixel,
+        // so when the source is a neutral gray — the common "desaturate overlay" case
+        // — the least-wrong rendering is to skip drawing the source at all. That lets
+        // the underlying graphic show through instead of being covered by an opaque
+        // gray block. Colored sources still get a semi-transparent fallback.
+        private static readonly HashSet<string> ChromaBlendModes =
+            new HashSet<string> { "COLOR", "HUE", "SATURATION", "DARKEN", "LIGHTEN" };
+
         /// <summary>
         /// Apply blend mode material to an Image component if needed.
         /// LUMINOSITY is approximated by desaturating image.color (Rec.601 luma);
@@ -49,13 +58,39 @@ namespace SoobakFigma2Unity.Editor.Converters
                     return true;
                 }
                 logger?.Warn($"{image.gameObject.name}: shader '{shaderName}' not found for blend mode '{figmaBlendMode}'");
-            }
-            else
-            {
-                logger?.Warn($"{image.gameObject.name}: blend mode '{figmaBlendMode}' not supported — using Normal");
+                return false;
             }
 
+            if (ChromaBlendModes.Contains(figmaBlendMode))
+            {
+                if (IsApproximatelyGrayscale(image.color))
+                {
+                    // Gray source + COLOR-family blend ≈ desaturate destination. We can't
+                    // desaturate without a shader, but covering the destination with solid
+                    // gray is worse than showing the untouched destination — so we hide
+                    // this graphic entirely and let the layer below render unchanged.
+                    image.color = new UnityEngine.Color(image.color.r, image.color.g, image.color.b, 0f);
+                    logger?.Info($"{image.gameObject.name}: '{figmaBlendMode}' with gray source — hidden (closer to Figma than an opaque cover)");
+                    return true;
+                }
+                // Colored source: fall back to semi-transparent overlay so the destination
+                // at least partially reads through.
+                var c = image.color;
+                image.color = new UnityEngine.Color(c.r, c.g, c.b, c.a * 0.35f);
+                logger?.Warn($"{image.gameObject.name}: '{figmaBlendMode}' with colored source — rendered as 35% alpha overlay (approximation)");
+                return true;
+            }
+
+            logger?.Warn($"{image.gameObject.name}: blend mode '{figmaBlendMode}' not supported — using Normal");
             return false;
+        }
+
+        private static bool IsApproximatelyGrayscale(UnityEngine.Color c)
+        {
+            const float tol = 0.04f; // ≈ 10 / 255
+            return Mathf.Abs(c.r - c.g) < tol
+                && Mathf.Abs(c.g - c.b) < tol
+                && Mathf.Abs(c.r - c.b) < tol;
         }
 
         /// <summary>
@@ -74,6 +109,20 @@ namespace SoobakFigma2Unity.Editor.Converters
             if (figmaBlendMode == "LUMINOSITY")
             {
                 text.color = ApproximateLuminosity(text.color);
+                return true;
+            }
+
+            if (ChromaBlendModes.Contains(figmaBlendMode))
+            {
+                if (IsApproximatelyGrayscale(text.color))
+                {
+                    text.color = new UnityEngine.Color(text.color.r, text.color.g, text.color.b, 0f);
+                    logger?.Info($"{text.gameObject.name}: '{figmaBlendMode}' with gray source on text — hidden");
+                    return true;
+                }
+                var c = text.color;
+                text.color = new UnityEngine.Color(c.r, c.g, c.b, c.a * 0.35f);
+                logger?.Warn($"{text.gameObject.name}: '{figmaBlendMode}' with colored source on text — rendered as 35% alpha");
                 return true;
             }
 

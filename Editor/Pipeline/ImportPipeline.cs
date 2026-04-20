@@ -66,15 +66,25 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     CollectImageRequirements(frame, ctx);
                 _logger.Info($"Nodes to rasterize: {ctx.NodesToRasterize.Count}, Image fills: {ctx.ImageFillRefs.Count}");
 
-                // 3. Download images (parallel)
-                progress.Step($"Downloading {ctx.NodesToRasterize.Count} images...");
+                // 3. Download images (parallel). We include parents of chroma-blend nodes
+                // so the downloaded parent PNG can be cropped into a per-child composite
+                // below (UGUI can't compose chroma blend modes itself).
+                var idsToDownload = new List<string>(ctx.NodesToRasterize);
+                foreach (var p in ctx.CompositeCropParents)
+                    if (!ctx.NodesToRasterize.Contains(p)) idsToDownload.Add(p);
+
+                progress.Step($"Downloading {idsToDownload.Count} images...");
                 var downloader = new ImageDownloader(api, _logger);
-                if (ctx.NodesToRasterize.Count > 0)
+                if (idsToDownload.Count > 0)
                     ctx.NodeImagePaths = await downloader.DownloadNodeImagesAsync(
-                        fileKey, ctx.NodesToRasterize.ToList(), GetTempImageDir(), profile.ImageScale, ct);
+                        fileKey, idsToDownload, GetTempImageDir(), profile.ImageScale, ct);
                 if (ctx.ImageFillRefs.Count > 0)
                     ctx.FillImagePaths = await downloader.DownloadImageFillsAsync(
                         fileKey, ctx.ImageFillRefs, GetTempImageDir(), ct);
+
+                // 3b. Crop parent PNGs into per-child composite PNGs for chroma-blend nodes.
+                if (ctx.CompositeCropMap.Count > 0)
+                    CompositeCropService.CropAll(ctx, GetTempImageDir(), profile.ImageScale, _logger);
 
                 // 4-6. Shared conversion
                 progress.Step("Importing images...");
@@ -459,9 +469,23 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
         // ─── Helpers ────────────────────────────────────
 
-        private void CollectImageRequirements(FigmaNode node, ImportContext ctx)
+        private void CollectImageRequirements(FigmaNode node, ImportContext ctx) =>
+            CollectImageRequirements(node, null, ctx);
+
+        private void CollectImageRequirements(FigmaNode node, FigmaNode parent, ImportContext ctx)
         {
             if (NodeConverterRegistry.ShouldSkip(node)) return;
+
+            // Chroma blend modes (COLOR/HUE/SATURATION/DARKEN/LIGHTEN) can't be rendered
+            // directly in UGUI — we rely on Figma to bake the composite by rendering the
+            // parent and cropping afterwards. Register BOTH: the parent has to be rendered,
+            // and the child has to remember which parent owns its crop.
+            if (parent != null && IsChromaCompositeBlend(node.BlendMode))
+            {
+                ctx.CompositeCropMap[node.Id] = parent.Id;
+                if (!ctx.NodesToRasterize.Contains(parent.Id))
+                    ctx.CompositeCropParents.Add(parent.Id);
+            }
 
             bool needsRaster = NodeConverterRegistry.NeedsRasterization(node);
             if (needsRaster)
@@ -480,7 +504,14 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
             if (node.Children != null)
                 foreach (var child in node.Children)
-                    CollectImageRequirements(child, ctx);
+                    CollectImageRequirements(child, node, ctx);
+        }
+
+        private static bool IsChromaCompositeBlend(string blendMode)
+        {
+            return blendMode == "COLOR" || blendMode == "HUE" ||
+                   blendMode == "SATURATION" || blendMode == "DARKEN" ||
+                   blendMode == "LIGHTEN";
         }
 
         private static bool IsEmptyGroup(FigmaNode n) =>

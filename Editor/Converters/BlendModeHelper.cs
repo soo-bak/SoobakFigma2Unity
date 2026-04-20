@@ -63,21 +63,26 @@ namespace SoobakFigma2Unity.Editor.Converters
 
             if (ChromaBlendModes.Contains(figmaBlendMode))
             {
-                if (IsApproximatelyGrayscale(image.color))
+                // Ideal case — CompositeCropService already baked the blend into this
+                // sprite by cropping it out of the parent's Figma render. Just render it.
+                if (image.sprite != null)
                 {
-                    // Gray source + COLOR-family blend ≈ desaturate destination. We can't
-                    // desaturate without a shader, but covering the destination with solid
-                    // gray is worse than showing the untouched destination — so we hide
-                    // this graphic entirely and let the layer below render unchanged.
-                    image.color = new UnityEngine.Color(image.color.r, image.color.g, image.color.b, 0f);
-                    logger?.Info($"{image.gameObject.name}: '{figmaBlendMode}' with gray source — hidden (closer to Figma than an opaque cover)");
+                    logger?.Info($"{image.gameObject.name}: '{figmaBlendMode}' sourced from composite crop (parent render baked the blend)");
                     return true;
                 }
-                // Colored source: fall back to semi-transparent overlay so the destination
-                // at least partially reads through.
+
+                // Fallback — no composite sprite available (parent render failed, or
+                // the node has no parent in our index). UGUI can't compute the blend
+                // itself, so approximate to avoid covering the destination.
+                if (IsApproximatelyGrayscale(image.color))
+                {
+                    image.color = new UnityEngine.Color(image.color.r, image.color.g, image.color.b, 0f);
+                    logger?.Warn($"{image.gameObject.name}: '{figmaBlendMode}' with gray source — no composite crop available, hidden as fallback");
+                    return true;
+                }
                 var c = image.color;
                 image.color = new UnityEngine.Color(c.r, c.g, c.b, c.a * 0.35f);
-                logger?.Warn($"{image.gameObject.name}: '{figmaBlendMode}' with colored source — rendered as 35% alpha overlay (approximation)");
+                logger?.Warn($"{image.gameObject.name}: '{figmaBlendMode}' with colored source — no composite crop, 35% alpha fallback");
                 return true;
             }
 

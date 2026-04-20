@@ -83,8 +83,14 @@ namespace SoobakFigma2Unity.Editor.Converters
                 }
             }
 
-            // Nodes with visible effects (shadow, blur) need rasterization
-            if (node.Effects != null)
+            // Nodes with visible effects (shadow, blur):
+            // - For containers (FRAME/GROUP/COMPONENT/INSTANCE), do NOT rasterize the
+            //   whole container, otherwise text and structured children get baked into
+            //   the image. Effects on containers are visual approximations only —
+            //   apply Unity Shadow/Outline components to descendants if needed.
+            // - For visual-only types (RECTANGLE), still rasterize to capture the
+            //   effect since they have no internal structure to preserve.
+            if (node.Effects != null && t == FigmaNodeType.RECTANGLE)
             {
                 foreach (var effect in node.Effects)
                 {

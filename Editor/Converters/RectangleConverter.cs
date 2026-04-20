@@ -9,7 +9,10 @@ using UnityEngine.UI;
 namespace SoobakFigma2Unity.Editor.Converters
 {
     /// <summary>
-    /// Converts RECTANGLE nodes to Image components.
+    /// Converts RECTANGLE nodes to Image components — but only when there is
+    /// actual visual content. Empty rectangles (no fill, no sprite) get just
+    /// a RectTransform so they don't render as blank white blocks that occlude
+    /// content beneath them.
     /// </summary>
     internal sealed class RectangleConverter : INodeConverter
     {
@@ -25,51 +28,64 @@ namespace SoobakFigma2Unity.Editor.Converters
             var nodeRef = go.AddComponent<FigmaNodeRef>();
             nodeRef.FigmaNodeId = node.Id;
 
-            var image = go.AddComponent<Image>();
+            // Decide visual content (don't add Image until we have something to show)
+            Sprite chosenSprite = null;
+            UnityEngine.Color? chosenColor = null;
 
-            // Solid color optimization
-            if (ctx.Profile.SolidColorOptimization && SolidColorOptimizer.CanUseSolidColor(node))
+            // 1) Rasterized sprite (vector op, image-fill cropped, etc.)
+            if (ctx.NodeSprites.TryGetValue(node.Id, out var nodeSprite))
+            {
+                chosenSprite = nodeSprite;
+            }
+            // 2) Solid color optimization
+            else if (ctx.Profile.SolidColorOptimization && SolidColorOptimizer.CanUseSolidColor(node))
             {
                 var color = SolidColorOptimizer.GetTopSolidColor(node);
-                image.color = color != null
-                    ? ColorSpaceHelper.Convert(color, node.Opacity)
-                    : UnityEngine.Color.clear;
+                if (color != null)
+                    chosenColor = ColorSpaceHelper.Convert(color, node.Opacity);
             }
-            else if (ctx.NodeSprites.TryGetValue(node.Id, out var sprite))
-            {
-                image.sprite = sprite;
-                image.type = (sprite.border != UnityEngine.Vector4.zero)
-                    ? Image.Type.Sliced
-                    : Image.Type.Simple;
-                image.color = UnityEngine.Color.white;
-            }
+            // 3) Raw image fill (uncropped — fallback when node wasn't rasterized)
             else if (node.Fills != null)
             {
-                // Try image fill
                 foreach (var fill in node.Fills)
                 {
                     if (fill.Visible && fill.IsImage && fill.ImageRef != null &&
                         ctx.FillSprites.TryGetValue(fill.ImageRef, out var fillSprite))
                     {
-                        image.sprite = fillSprite;
+                        chosenSprite = fillSprite;
                         break;
                     }
                 }
             }
 
-            // Apply corner radius hint for 9-slice (logged for user awareness)
-            if (node.CornerRadius > 0)
+            // Only add Image when there is actual content to render
+            if (chosenSprite != null || chosenColor != null)
             {
-                ctx.Logger.Info($"{node.Name}: cornerRadius={node.CornerRadius}px (9-slice candidate)");
+                var image = go.AddComponent<Image>();
+                if (chosenSprite != null)
+                {
+                    image.sprite = chosenSprite;
+                    image.type = (chosenSprite.border != UnityEngine.Vector4.zero)
+                        ? Image.Type.Sliced
+                        : Image.Type.Simple;
+                    image.color = UnityEngine.Color.white;
+                }
+                else
+                {
+                    image.color = chosenColor.Value;
+                }
+
+                // Opacity adjustment
+                if (node.Opacity < 1f && image.color.a >= 1f)
+                {
+                    var c = image.color;
+                    c.a = node.Opacity;
+                    image.color = c;
+                }
             }
 
-            // Opacity
-            if (node.Opacity < 1f && image.color.a >= 1f)
-            {
-                var c = image.color;
-                c.a = node.Opacity;
-                image.color = c;
-            }
+            if (node.CornerRadius > 0)
+                ctx.Logger.Info($"{node.Name}: cornerRadius={node.CornerRadius}px (9-slice candidate)");
 
             return go;
         }

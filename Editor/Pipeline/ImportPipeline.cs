@@ -180,9 +180,15 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
         // ─── Child conversion ───────────────────────────
 
-        private void ConvertChildren(FigmaNode parentNode, GameObject parentGo, ImportContext ctx, ImportProfile profile)
+        private void ConvertChildren(FigmaNode parentNode, GameObject parentGo, ImportContext ctx, ImportProfile profile, FigmaNode posOverride = null)
         {
             if (parentNode.Children == null) return;
+
+            // The Figma node whose absolute bbox defines the coordinate space
+            // for child positioning. Normally this is parentNode, but when we
+            // are flattening a Group, posOverride points to the OUTER visual
+            // parent so children compute correct positions in Unity hierarchy.
+            var visualParent = posOverride ?? parentNode;
 
             // Mask redirection state — scoped to this child loop only.
             // When we encounter an isMask sibling, subsequent siblings get reparented
@@ -195,7 +201,12 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             {
                 if (NodeConverterRegistry.ShouldSkip(childNode)) continue;
                 if (profile.FlattenEmptyGroups && IsEmptyGroup(childNode))
-                { ConvertChildren(childNode, parentGo, ctx, profile); continue; }
+                {
+                    // Pass the actual visual parent so flattened children compute
+                    // positions relative to the outer parent (where they'll live in Unity).
+                    ConvertChildren(childNode, parentGo, ctx, profile, posOverride: visualParent);
+                    continue;
+                }
 
                 var converter = _registry.GetConverter(childNode);
                 if (converter == null) { ctx.Logger.Warn($"No converter for '{childNode.Type}': {childNode.Name}"); continue; }
@@ -205,7 +216,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 bool redirectIntoMask = !parentIsAutoLayout && currentMaskGo != null && !isMaskNode;
 
                 GameObject targetParentGo = redirectIntoMask ? currentMaskGo : parentGo;
-                FigmaNode posParentNode = redirectIntoMask ? currentMaskNode : parentNode;
+                FigmaNode posParentNode = redirectIntoMask ? currentMaskNode : visualParent;
 
                 GameObject childGo;
                 try
@@ -222,7 +233,8 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 var rt = childGo.GetComponent<RectTransform>();
                 if (rt == null) continue;
 
-                // Position relative to the *logical* parent (mask node when redirected, else real parent)
+                // Position relative to the *logical* parent (mask node when redirected, else real parent).
+                // When flattening, visualParent points to the outer parent for correct positioning.
                 if (!redirectIntoMask && parentNode.IsAutoLayout && !childNode.IsAbsolutePositioned)
                 {
                     if (profile.ConvertAutoLayout)

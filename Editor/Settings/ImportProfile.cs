@@ -31,7 +31,10 @@ namespace SoobakFigma2Unity.Editor.Settings
 
         // Layout
         public bool ConvertAutoLayout = true;
-        public bool FlattenEmptyGroups = true;
+        // Off by default: preserve Figma Group structure 1:1 in Unity hierarchy.
+        // When on, empty Groups are removed and their children are placed under
+        // the outer parent (positioning is recalculated to remain correct).
+        public bool FlattenEmptyGroups = false;
         public bool ApplyConstraints = true;
 
         // Color

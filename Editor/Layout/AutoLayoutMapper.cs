@@ -5,7 +5,9 @@ using UnityEngine.UI;
 namespace SoobakFigma2Unity.Editor.Layout
 {
     /// <summary>
-    /// Maps Figma Auto Layout to Unity LayoutGroup + ContentSizeFitter.
+    /// Maps Figma Auto Layout to Unity LayoutGroup + LayoutElement + ContentSizeFitter.
+    /// Comprehensive handling of layoutSizing (FIXED/FILL/HUG), layoutAlign (STRETCH),
+    /// layoutGrow, and child positioning.
     /// </summary>
     internal static class AutoLayoutMapper
     {
@@ -40,37 +42,42 @@ namespace SoobakFigma2Unity.Editor.Layout
                 isHorizontal
             );
 
-            // SPACE_BETWEEN
-            bool spaceAlong = node.PrimaryAxisAlignItems == "SPACE_BETWEEN";
+            // SPACE_BETWEEN: distribute children with space between
+            // Approximation via childForceExpand on the primary axis
+            bool spaceBetween = node.PrimaryAxisAlignItems == "SPACE_BETWEEN";
             if (isHorizontal)
             {
-                layoutGroup.childForceExpandWidth = spaceAlong;
+                layoutGroup.childForceExpandWidth = spaceBetween;
                 layoutGroup.childForceExpandHeight = false;
             }
             else
             {
                 layoutGroup.childForceExpandWidth = false;
-                layoutGroup.childForceExpandHeight = spaceAlong;
+                layoutGroup.childForceExpandHeight = spaceBetween;
             }
 
-            // IMPORTANT: childControl must be FALSE to prevent LayoutGroup from
-            // overriding child sizeDelta. Unity rebuilds layout when LayoutElement
-            // is added with default values (preferredSize=-1), causing sizeDelta
-            // to become (0,0) before our preferredWidth/Height values are set.
-            // Children manage their own sizeDelta via ApplyChildLayoutProperties.
-            layoutGroup.childControlWidth = false;
-            layoutGroup.childControlHeight = false;
+            // childControl=true is required for FILL/HUG/STRETCH to work correctly.
+            // ApplyChildLayoutProperties sets LayoutElement values BEFORE LayoutGroup
+            // first runs by writing them immediately after AddComponent<LayoutElement>.
+            layoutGroup.childControlWidth = true;
+            layoutGroup.childControlHeight = true;
             layoutGroup.childScaleWidth = false;
             layoutGroup.childScaleHeight = false;
 
-            // ContentSizeFitter for auto-sizing parent
+            // ContentSizeFitter for parent's own sizing (primaryAxisSizingMode/counterAxisSizingMode = AUTO)
             ApplyContentSizeFitter(go, node, isHorizontal);
+
+            // layoutWrap: Unity's LayoutGroup doesn't support wrapping by default
+            if (node.LayoutWrap == "WRAP")
+            {
+                Debug.LogWarning($"[SoobakFigma2Unity] '{node.Name}' uses layoutWrap=WRAP — Unity LayoutGroup doesn't support wrapping. Children will overflow on a single line.");
+            }
         }
 
         /// <summary>
-        /// Apply LayoutElement + sizeDelta to a child within an auto-layout parent.
-        /// This is critical: Unity LayoutGroup needs both LayoutElement AND sizeDelta
-        /// to correctly size children.
+        /// Configure a child of an auto-layout container.
+        /// Sets LayoutElement values FIRST (so LayoutGroup gets correct values on its
+        /// first layout pass), then handles layoutAlign STRETCH and HUG ContentSizeFitter.
         /// </summary>
         public static void ApplyChildLayoutProperties(GameObject childGo, FigmaNode childNode, FigmaNode parentNode)
         {
@@ -79,46 +86,91 @@ namespace SoobakFigma2Unity.Editor.Layout
 
             var rt = childGo.GetComponent<RectTransform>();
             var childSize = SizeCalculator.GetSize(childNode);
+            bool parentIsHorizontal = parentNode.LayoutMode == "HORIZONTAL";
 
-            // Reset anchors for layout children — LayoutGroup will manage positioning
-            rt.anchorMin = new Vector2(0, 1);
-            rt.anchorMax = new Vector2(0, 1);
-            rt.pivot = new Vector2(0.5f, 0.5f);
-            rt.sizeDelta = childSize;
-
-            var layoutElement = childGo.AddComponent<LayoutElement>();
+            // 1) Add LayoutElement and IMMEDIATELY set values (before any layout pass).
+            //    LayoutGroup with childControl=true uses these to size children.
+            var le = childGo.AddComponent<LayoutElement>();
 
             var hSizing = childNode.LayoutSizingHorizontal ?? "FIXED";
             var vSizing = childNode.LayoutSizingVertical ?? "FIXED";
 
-            // Horizontal
+            // Horizontal sizing
             switch (hSizing)
             {
                 case "FIXED":
-                    layoutElement.preferredWidth = childSize.x;
-                    layoutElement.minWidth = childSize.x;
+                    le.preferredWidth = childSize.x;
+                    le.minWidth = childSize.x;
+                    le.flexibleWidth = -1; // disabled
                     break;
                 case "FILL":
-                    layoutElement.flexibleWidth = childNode.LayoutGrow > 0 ? childNode.LayoutGrow : 1f;
+                    // Fill remaining horizontal space proportionally to layoutGrow
+                    le.flexibleWidth = childNode.LayoutGrow > 0 ? childNode.LayoutGrow : 1f;
+                    le.preferredWidth = childSize.x; // fallback when no flex space available
                     break;
                 case "HUG":
-                    // Prefer content-driven size
+                    // Sized to content via ContentSizeFitter (added below)
+                    le.preferredWidth = -1;
+                    le.flexibleWidth = -1;
                     break;
             }
 
-            // Vertical
+            // Vertical sizing
             switch (vSizing)
             {
                 case "FIXED":
-                    layoutElement.preferredHeight = childSize.y;
-                    layoutElement.minHeight = childSize.y;
+                    le.preferredHeight = childSize.y;
+                    le.minHeight = childSize.y;
+                    le.flexibleHeight = -1;
                     break;
                 case "FILL":
-                    layoutElement.flexibleHeight = childNode.LayoutGrow > 0 ? childNode.LayoutGrow : 1f;
+                    le.flexibleHeight = childNode.LayoutGrow > 0 ? childNode.LayoutGrow : 1f;
+                    le.preferredHeight = childSize.y;
                     break;
                 case "HUG":
+                    le.preferredHeight = -1;
+                    le.flexibleHeight = -1;
                     break;
             }
+
+            // 2) layoutAlign STRETCH: child stretches across the cross-axis of parent.
+            //    HORIZONTAL parent → STRETCH means fill parent height
+            //    VERTICAL parent → STRETCH means fill parent width
+            if (childNode.LayoutAlign == "STRETCH")
+            {
+                if (parentIsHorizontal)
+                {
+                    le.flexibleHeight = 1f;
+                    // Allow LayoutGroup to size beyond preferred
+                    le.minHeight = -1;
+                }
+                else
+                {
+                    le.flexibleWidth = 1f;
+                    le.minWidth = -1;
+                }
+            }
+
+            // 3) HUG sizing → ContentSizeFitter on the child itself so it sizes to content
+            if (hSizing == "HUG" || vSizing == "HUG")
+            {
+                var fitter = childGo.GetComponent<ContentSizeFitter>()
+                    ?? childGo.AddComponent<ContentSizeFitter>();
+                fitter.horizontalFit = hSizing == "HUG"
+                    ? ContentSizeFitter.FitMode.PreferredSize
+                    : ContentSizeFitter.FitMode.Unconstrained;
+                fitter.verticalFit = vSizing == "HUG"
+                    ? ContentSizeFitter.FitMode.PreferredSize
+                    : ContentSizeFitter.FitMode.Unconstrained;
+            }
+
+            // 4) RT initial state. With childControl=true, LayoutGroup will overwrite
+            //    anchors/sizeDelta to its own scheme during layout. We set sane defaults
+            //    so the child renders correctly even if layout hasn't run yet.
+            rt.anchorMin = new Vector2(0, 1);
+            rt.anchorMax = new Vector2(0, 1);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.sizeDelta = childSize;
         }
 
         private static void ApplyContentSizeFitter(GameObject go, FigmaNode node, bool isHorizontal)
@@ -129,7 +181,8 @@ namespace SoobakFigma2Unity.Editor.Layout
             if (!primaryAuto && !counterAuto)
                 return;
 
-            var fitter = go.AddComponent<ContentSizeFitter>();
+            var fitter = go.GetComponent<ContentSizeFitter>()
+                ?? go.AddComponent<ContentSizeFitter>();
 
             if (isHorizontal)
             {
@@ -177,7 +230,7 @@ namespace SoobakFigma2Unity.Editor.Layout
                 "MIN" => 0,
                 "CENTER" => 1,
                 "MAX" => 2,
-                "SPACE_BETWEEN" => 0,
+                "SPACE_BETWEEN" => 0, // handled via childForceExpand
                 "BASELINE" => 0,
                 _ => 0
             };

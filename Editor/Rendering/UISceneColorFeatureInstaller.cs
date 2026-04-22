@@ -1,4 +1,5 @@
 #if SOOBAK_FIGMA2UNITY_URP
+using System.Collections.Generic;
 using System.Linq;
 using SoobakFigma2Unity.Runtime.URP;
 using UnityEditor;
@@ -9,65 +10,107 @@ using UnityEngine.Rendering.Universal;
 namespace SoobakFigma2Unity.Editor.URP
 {
     /// <summary>
-    /// On editor load, ensures the active URP renderer carries
-    /// <see cref="UISceneColorCopyFeature"/>. Without that feature the Figma
-    /// Appearance=Color shader has no destination texture to sample and
-    /// renders as solid black, so the auto-install removes the entire setup
-    /// burden from the artist.
+    /// On editor load, ensures every URP <see cref="ScriptableRendererData"/> in the
+    /// project carries <see cref="UISceneColorCopyFeature"/>. Without that feature the
+    /// Figma Appearance=Color shader has no destination texture to sample (the
+    /// <c>_UISceneColor</c> global stays unbound) and the blend produces wrong output.
     ///
-    /// Re-runs after every domain reload — if the user manually removes the
-    /// feature it will silently come back, which is the correct behaviour for
-    /// "tool ships its own rendering dependency".
+    /// Runs once per domain reload. Also exposes a manual menu item so the user can
+    /// re-run the install at will, e.g. after creating new URP assets.
     /// </summary>
     [InitializeOnLoad]
     internal static class UISceneColorFeatureInstaller
     {
+        private const string MenuPath = "Window/SoobakFigma2Unity/Reinstall URP Color-blend Feature";
+
         static UISceneColorFeatureInstaller()
         {
-            // Defer to avoid running during a still-loading domain.
-            EditorApplication.delayCall += EnsureInstalled;
+            EditorApplication.delayCall += AutoInstall;
         }
 
-        private static void EnsureInstalled()
+        private static void AutoInstall()
         {
-            EditorApplication.delayCall -= EnsureInstalled;
+            EditorApplication.delayCall -= AutoInstall;
+            Install(verbose: false);
+        }
 
-            var urp = GraphicsSettings.defaultRenderPipeline as UniversalRenderPipelineAsset
-                      ?? QualitySettings.renderPipeline as UniversalRenderPipelineAsset;
-            if (urp == null) return; // not a URP project — nothing to do
+        [MenuItem(MenuPath)]
+        private static void ManualInstall() => Install(verbose: true);
 
-            // URP exposes its renderer list only via SerializedObject; we need that to
-            // grab the underlying ScriptableRendererData asset (which owns the feature
-            // sub-assets we want to add).
-            var so = new SerializedObject(urp);
-            var renderersProp = so.FindProperty("m_RendererDataList");
-            if (renderersProp == null || !renderersProp.isArray) return;
-
-            for (int i = 0; i < renderersProp.arraySize; i++)
+        private static void Install(bool verbose)
+        {
+            var rendererDatas = FindAllRendererData();
+            if (rendererDatas.Count == 0)
             {
-                var rendererData = renderersProp.GetArrayElementAtIndex(i).objectReferenceValue
-                                   as ScriptableRendererData;
-                if (rendererData == null) continue;
-                EnsureFeatureOnRenderer(rendererData);
+                if (verbose)
+                    Debug.LogWarning("[SoobakFigma2Unity] No URP ScriptableRendererData assets found in project.");
+                return;
+            }
+
+            int installed = 0, alreadyPresent = 0;
+            foreach (var rd in rendererDatas)
+            {
+                if (TryEnsureFeature(rd, out var added))
+                {
+                    if (added) installed++;
+                    else alreadyPresent++;
+                }
+            }
+
+            if (verbose || installed > 0)
+            {
+                Debug.Log($"[SoobakFigma2Unity] URP Color-blend feature install: " +
+                          $"{installed} added, {alreadyPresent} already present, " +
+                          $"{rendererDatas.Count} renderers checked.");
             }
         }
 
-        private static void EnsureFeatureOnRenderer(ScriptableRendererData rendererData)
+        private static List<ScriptableRendererData> FindAllRendererData()
         {
-            if (rendererData.rendererFeatures.Any(f => f is UISceneColorCopyFeature)) return;
+            var results = new List<ScriptableRendererData>();
+            var guids = AssetDatabase.FindAssets("t:ScriptableRendererData");
+            foreach (var guid in guids)
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                var rd = AssetDatabase.LoadAssetAtPath<ScriptableRendererData>(path);
+                if (rd != null) results.Add(rd);
+            }
+            return results;
+        }
+
+        private static bool TryEnsureFeature(ScriptableRendererData rd, out bool added)
+        {
+            added = false;
+            if (rd == null) return false;
+
+            // Skip 2D renderer — Figma UI prefabs go through a 3D-style URP Universal
+            // Renderer; adding the feature to a 2D renderer is unnecessary.
+            if (rd.GetType().Name == "Renderer2DData")
+                return true;
+
+            if (rd.rendererFeatures.Any(f => f is UISceneColorCopyFeature))
+                return true;
 
             var feature = ScriptableObject.CreateInstance<UISceneColorCopyFeature>();
             feature.name = "UI Scene Color Copy (Figma COLOR blend)";
 
-            // Adding as a sub-asset of the renderer data is what makes URP's inspector
-            // recognise it as a real feature on that renderer (rather than an orphan).
-            AssetDatabase.AddObjectToAsset(feature, rendererData);
-            rendererData.rendererFeatures.Add(feature);
+            // The feature must be a sub-asset of the renderer data so URP's inspector
+            // and serialisation see it as part of that renderer.
+            AssetDatabase.AddObjectToAsset(feature, rd);
+            rd.rendererFeatures.Add(feature);
 
-            EditorUtility.SetDirty(rendererData);
+            // Round-trip via SerializedObject so Unity persists the new entry — direct
+            // list mutations on URP renderer data are sometimes silently dropped on
+            // domain reload without an explicit serialization update.
+            var so = new SerializedObject(rd);
+            so.Update();
+            so.ApplyModifiedProperties();
+
+            EditorUtility.SetDirty(rd);
             AssetDatabase.SaveAssets();
 
-            Debug.Log($"[SoobakFigma2Unity] Installed UISceneColorCopyFeature on renderer '{rendererData.name}'.");
+            added = true;
+            return true;
         }
     }
 }

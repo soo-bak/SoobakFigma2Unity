@@ -98,14 +98,33 @@ namespace SoobakFigma2Unity.Editor.URP
             // The feature must be a sub-asset of the renderer data so URP's inspector
             // and serialisation see it as part of that renderer.
             AssetDatabase.AddObjectToAsset(feature, rd);
-            rd.rendererFeatures.Add(feature);
 
-            // Round-trip via SerializedObject so Unity persists the new entry — direct
-            // list mutations on URP renderer data are sometimes silently dropped on
-            // domain reload without an explicit serialization update.
+            // URP stores renderer features as two parallel serialized arrays:
+            //   m_RendererFeatures  — object references to the ScriptableRendererFeature sub-assets
+            //   m_RendererFeatureMap — int64 unique IDs kept 1:1 with the list
+            // If only the first array is populated (as a previous version of this
+            // installer did, via `rd.rendererFeatures.Add(...)`), URP's inspector
+            // and the serialization roundtrip drop the entry silently. Both arrays
+            // must be updated through SerializedProperty to survive domain reload.
             var so = new SerializedObject(rd);
             so.Update();
-            so.ApplyModifiedProperties();
+            var featuresProp = so.FindProperty("m_RendererFeatures");
+            var featureMapProp = so.FindProperty("m_RendererFeatureMap");
+            if (featuresProp == null || featureMapProp == null)
+            {
+                Debug.LogError($"[SoobakFigma2Unity] Could not locate m_RendererFeatures / m_RendererFeatureMap on {rd.name}. URP internal layout may have changed.");
+                Object.DestroyImmediate(feature, true);
+                return false;
+            }
+
+            int newIndex = featuresProp.arraySize;
+            featuresProp.arraySize = newIndex + 1;
+            featuresProp.GetArrayElementAtIndex(newIndex).objectReferenceValue = feature;
+
+            featureMapProp.arraySize = newIndex + 1;
+            featureMapProp.GetArrayElementAtIndex(newIndex).longValue = feature.GetInstanceID();
+
+            so.ApplyModifiedPropertiesWithoutUndo();
 
             EditorUtility.SetDirty(rd);
             AssetDatabase.SaveAssets();

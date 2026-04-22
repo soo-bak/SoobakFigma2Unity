@@ -36,6 +36,7 @@ namespace SoobakFigma2Unity.Runtime.URP
         private sealed class CopyPass : ScriptableRenderPass
         {
             private static readonly int GlobalTexId = Shader.PropertyToID("_UISceneColor");
+            private static bool _firstFireLogged;
 
             private class PassData
             {
@@ -46,6 +47,12 @@ namespace SoobakFigma2Unity.Runtime.URP
             {
                 var resourceData = frameData.Get<UniversalResourceData>();
                 if (!resourceData.activeColorTexture.IsValid()) return;
+
+                if (!_firstFireLogged)
+                {
+                    _firstFireLogged = true;
+                    Debug.Log("[SoobakFigma2Unity] UISceneColorCopyFeature: RecordRenderGraph fired — _UISceneColor will be bound.");
+                }
 
                 // Allocate a destination texture matching the active color descriptor.
                 var desc = renderGraph.GetTextureDesc(resourceData.activeColorTexture);

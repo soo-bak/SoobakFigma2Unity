@@ -19,11 +19,12 @@ namespace SoobakFigma2Unity.Editor.Converters
             { "MULTIPLY", "SoobakFigma2Unity/UI/Multiply" },
             { "SCREEN", "SoobakFigma2Unity/UI/Screen" },
             { "OVERLAY", "SoobakFigma2Unity/UI/Overlay" },
-            // COLOR uses a GrabPass HSL-blend shader (Runtime/Shaders/UIBlendColor.shader)
-            // that samples the destination pixel and outputs HSL(src.h, src.s, dst.l).
-            // That's the only way stock UGUI can reproduce Figma's destination-dependent
-            // chroma blends — and it's the shader the user explicitly opted in to.
-            { "COLOR", "SoobakFigma2Unity/UI/ColorBlend" },
+            // COLOR routes to the URP shader (SoobakFigma2Unity/URP/BlendColor) which
+            // samples the global _UISceneColor texture filled by UISceneColorCopyFeature.
+            // GrabPass is unsupported in URP, so destination access goes through the
+            // RendererFeature instead. Falls back to ChromaBlendModes (hide / 35% alpha)
+            // if the shader isn't available (URP not installed).
+            { "COLOR", "SoobakFigma2Unity/URP/BlendColor" },
         };
 
         // Blend modes whose result depends on the destination's HSL (chroma/luma

@@ -1,0 +1,25 @@
+{
+  "name": "SoobakFigma2Unity.Runtime.URP",
+  "rootNamespace": "SoobakFigma2Unity.Runtime.URP",
+  "references": [
+    "Unity.RenderPipelines.Core.Runtime",
+    "Unity.RenderPipelines.Universal.Runtime"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [
+    "SOOBAK_FIGMA2UNITY_URP"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.unity.render-pipelines.universal",
+      "expression": "14.0.0",
+      "define": "SOOBAK_FIGMA2UNITY_URP"
+    }
+  ],
+  "noEngineReferences": false
+}

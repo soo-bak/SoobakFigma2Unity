@@ -163,6 +163,14 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
 
             fixed4 frag(v2f i) : SV_Target
             {
+                // Diagnostic mode — bypass every other path so we can tell whether the
+                // shader's fragment is running at all. If the Image shows a solid red
+                // rectangle, the shader compiles, the Canvas dispatches it, and the
+                // material is bound. Any other result pinpoints where the pipeline
+                // breaks. Remove this block once the "still transparent" case is root-caused.
+                return fixed4(1.0, 0.0, 0.0, 1.0);
+
+                /*
                 fixed4 src = (tex2D(_MainTex, i.texcoord) + _TextureSampleAdd) * i.color;
 
                 float2 screenUV = i.screenPos.xy / max(i.screenPos.w, 1e-5);
@@ -185,6 +193,7 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
                 #endif
 
                 return outCol;
+                */
             }
             ENDCG
         }

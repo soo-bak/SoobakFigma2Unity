@@ -87,12 +87,14 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
             CBUFFER_START(UnityPerMaterial)
                 float4 _MainTex_ST;
                 half4  _Color;
-                float4 _ClipRect;
             CBUFFER_END
 
-            // Set per-renderer by UGUI for distance-field text. Plain Image leaves
-            // it at zero, so kept outside the SRP-batched material CBUFFER.
-            half4 _TextureSampleAdd;
+            // Per-renderer values, set by UGUI's MaskableGraphic / TMP at draw time.
+            // They MUST live outside UnityPerMaterial — otherwise the SRP batcher
+            // refuses to batch (it assumes per-material values are constant) and
+            // shader compilation may fall back to the URP error path (magenta).
+            float4 _ClipRect;
+            half4  _TextureSampleAdd;
 
             Varyings vert(Attributes IN)
             {

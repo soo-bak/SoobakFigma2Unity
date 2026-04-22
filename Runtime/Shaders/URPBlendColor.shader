@@ -68,6 +68,14 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
             #pragma fragment frag
             #pragma target 2.0
 
+            // UGUI sets these keywords on the material at draw time when the Image
+            // is under a Mask / RectMask2D / has alpha clip enabled. Without them,
+            // _ClipRect defaults to (0,0,0,0) and an unconditional UnityGet2DClipping
+            // call would clip every pixel — that's exactly why the previous version
+            // rendered as fully-transparent quads.
+            #pragma multi_compile_local _ UNITY_UI_CLIP_RECT
+            #pragma multi_compile_local _ UNITY_UI_ALPHACLIP
+
             #include "UnityCG.cginc"
             #include "UnityUI.cginc"
 
@@ -168,7 +176,15 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
                 float3 blended = HslToRgb(float3(srcHsl.x, srcHsl.y, dstHsl.z));
 
                 fixed4 outCol = fixed4(blended, src.a);
-                outCol.a *= UnityGet2DClipping(i.worldPosition.xy, _ClipRect);
+
+                #ifdef UNITY_UI_CLIP_RECT
+                    outCol.a *= UnityGet2DClipping(i.worldPosition.xy, _ClipRect);
+                #endif
+
+                #ifdef UNITY_UI_ALPHACLIP
+                    clip(outCol.a - 0.001);
+                #endif
+
                 return outCol;
             }
             ENDCG

@@ -72,11 +72,11 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
 
             struct Varyings
             {
-                float4 positionCS : SV_POSITION;
-                half4  color      : COLOR;
-                float2 uv         : TEXCOORD0;
-                float4 worldPos   : TEXCOORD1;
-                float4 screenPos  : TEXCOORD2;
+                float4 positionCS  : SV_POSITION;
+                half4  color       : COLOR;
+                float2 uv          : TEXCOORD0;
+                float4 worldPos    : TEXCOORD1;
+                float4 positionNDC : TEXCOORD2;
             };
 
             TEXTURE2D(_MainTex);
@@ -99,11 +99,17 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
             Varyings vert(Attributes IN)
             {
                 Varyings OUT = (Varyings)0;
-                OUT.worldPos   = IN.positionOS;
-                OUT.positionCS = TransformObjectToHClip(IN.positionOS.xyz);
-                OUT.uv         = TRANSFORM_TEX(IN.uv, _MainTex);
-                OUT.color      = IN.color * _Color;
-                OUT.screenPos  = ComputeScreenPos(OUT.positionCS);
+                OUT.worldPos = IN.positionOS;
+
+                // GetVertexPositionInputs is the URP-canonical way to compute clip and
+                // NDC positions in one call. positionNDC replaces the deprecated
+                // ComputeScreenPos / UnityCG path.
+                VertexPositionInputs posIn = GetVertexPositionInputs(IN.positionOS.xyz);
+                OUT.positionCS  = posIn.positionCS;
+                OUT.positionNDC = posIn.positionNDC;
+
+                OUT.uv    = TRANSFORM_TEX(IN.uv, _MainTex);
+                OUT.color = IN.color * _Color;
                 return OUT;
             }
 
@@ -165,7 +171,7 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
             {
                 half4 src = (SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, IN.uv) + _TextureSampleAdd) * IN.color;
 
-                float2 screenUV = IN.screenPos.xy / max(IN.screenPos.w, 1e-5);
+                float2 screenUV = IN.positionNDC.xy / max(IN.positionNDC.w, 1e-5);
                 half4 dst = SAMPLE_TEXTURE2D(_UISceneColor, sampler_UISceneColor, screenUV);
 
                 float3 srcHsl = RgbToHsl(saturate(src.rgb));

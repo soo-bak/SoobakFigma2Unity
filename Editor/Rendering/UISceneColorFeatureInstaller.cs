@@ -23,15 +23,24 @@ namespace SoobakFigma2Unity.Editor.URP
     {
         private const string MenuPath = "Window/SoobakFigma2Unity/Reinstall URP Color-blend Feature";
 
+        private static bool _ran;
+
         static UISceneColorFeatureInstaller()
         {
             Debug.Log("[SoobakFigma2Unity] UISceneColorFeatureInstaller static ctor fired (domain load).");
-            EditorApplication.delayCall += AutoInstall;
+            // EditorApplication.delayCall is unreliable in Unity 6 when the editor
+            // is mid-reload chain (the queue is cleared before the call fires). Hook
+            // into .update instead — guaranteed to tick on the first idle frame,
+            // and one-shot it with the _ran guard.
+            EditorApplication.update += AutoInstall;
         }
 
         private static void AutoInstall()
         {
-            EditorApplication.delayCall -= AutoInstall;
+            if (_ran) return;
+            _ran = true;
+            EditorApplication.update -= AutoInstall;
+            Debug.Log("[SoobakFigma2Unity] AutoInstall tick reached — running Install().");
             Install(verbose: true);
         }
 

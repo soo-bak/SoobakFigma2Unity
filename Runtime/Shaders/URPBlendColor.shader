@@ -68,13 +68,12 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
             #pragma fragment frag
             #pragma target 2.0
 
-            // UGUI sets these keywords on the material at draw time when the Image
-            // is under a Mask / RectMask2D / has alpha clip enabled. Without them,
-            // _ClipRect defaults to (0,0,0,0) and an unconditional UnityGet2DClipping
-            // call would clip every pixel — that's exactly why the previous version
-            // rendered as fully-transparent quads.
-            #pragma multi_compile_local _ UNITY_UI_CLIP_RECT
-            #pragma multi_compile_local _ UNITY_UI_ALPHACLIP
+            // Exact pragma set that the stock UGUI UI-Default and mob-sakai's
+            // UIEffect shaders use — known to play well with URP's shader compiler
+            // and with UGUI's per-renderer keyword / property injection.
+            #pragma multi_compile _ UNITY_UI_CLIP_RECT
+            #pragma multi_compile _ UNITY_UI_ALPHACLIP
+            #pragma multi_compile_instancing
 
             #include "UnityCG.cginc"
             #include "UnityUI.cginc"

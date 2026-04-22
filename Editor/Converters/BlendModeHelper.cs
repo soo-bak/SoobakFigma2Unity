@@ -19,12 +19,19 @@ namespace SoobakFigma2Unity.Editor.Converters
             { "MULTIPLY", "SoobakFigma2Unity/UI/Multiply" },
             { "SCREEN", "SoobakFigma2Unity/UI/Screen" },
             { "OVERLAY", "SoobakFigma2Unity/UI/Overlay" },
-            // COLOR routes to the URP shader (SoobakFigma2Unity/URP/BlendColor) which
-            // samples the global _UISceneColor texture filled by UISceneColorCopyFeature.
-            // GrabPass is unsupported in URP, so destination access goes through the
-            // RendererFeature instead. Falls back to ChromaBlendModes (hide / 35% alpha)
-            // if the shader isn't available (URP not installed).
-            { "COLOR", "SoobakFigma2Unity/URP/BlendColor" },
+            // The URP/Blend* family all share UISceneColorCopyFeature's two-pass
+            // pipeline: copy active camera color to _UISceneColor, then redraw
+            // these renderers via the SoobakColorBlend LightMode tag so the shader
+            // can sample the previously-rendered UI as its destination. Each
+            // shader differs only in the chroma blend formula (HSL component
+            // swap or per-channel min/max). If the shader can't be found
+            // (URP not installed), TryApply falls through to the ChromaBlendModes
+            // hide / 35% alpha fallback.
+            { "COLOR",      "SoobakFigma2Unity/URP/BlendColor" },
+            { "HUE",        "SoobakFigma2Unity/URP/BlendHue" },
+            { "SATURATION", "SoobakFigma2Unity/URP/BlendSaturation" },
+            { "DARKEN",     "SoobakFigma2Unity/URP/BlendDarken" },
+            { "LIGHTEN",    "SoobakFigma2Unity/URP/BlendLighten" },
         };
 
         // Blend modes whose result depends on the destination's HSL (chroma/luma

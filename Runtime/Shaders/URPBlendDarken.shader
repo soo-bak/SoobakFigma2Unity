@@ -1,12 +1,10 @@
-// Figma "Appearance = Color" (HSL chroma blend) for Unity UGUI under URP.
-// result.rgb = HslToRgb(src.hue, src.saturation, dst.luminance)
+// Figma "Appearance = Darken" for Unity UGUI under URP.
+// result.rgb = min(src, dst) per-channel.
 //
-// All shared code (vertex, _UISceneColor sampling, HSL helpers, alpha
-// composite, UI clip) lives in URPBlendCommon.cginc. This file only
-// declares the COLOR variant via the SOOBAK_BLEND_VARIANT_COLOR macro.
-// See UISceneColorCopyFeature for the two-pass URP pipeline that this
-// shader's "SoobakColorBlend" LightMode tag plugs into.
-Shader "SoobakFigma2Unity/URP/BlendColor"
+// Goes through the same RendererFeature plumbing as the HSL blends so
+// it can read the previously-rendered UI as `dst`. See URPBlendColor.shader
+// for the architectural overview.
+Shader "SoobakFigma2Unity/URP/BlendDarken"
 {
     Properties
     {
@@ -53,7 +51,7 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
 
         Pass
         {
-            Name "ColorBlend"
+            Name "DarkenBlend"
             Tags { "LightMode" = "SoobakColorBlend" }
             CGPROGRAM
             #pragma vertex vert
@@ -61,7 +59,7 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
             #pragma target 2.0
             #pragma multi_compile_local _ UNITY_UI_CLIP_RECT
             #pragma multi_compile_local _ UNITY_UI_ALPHACLIP
-            #define SOOBAK_BLEND_VARIANT_COLOR
+            #define SOOBAK_BLEND_VARIANT_DARKEN
             #include "URPBlendCommon.cginc"
             ENDCG
         }

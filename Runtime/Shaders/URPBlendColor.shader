@@ -164,28 +164,32 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
                 float2 screenUV = IN.screenPos.xy / IN.screenPos.w;
                 half3 dst = tex2D(_UISceneColor, screenUV).rgb;
 
+                // --- DIAGNOSTIC ---
+                // Return the _UISceneColor sample directly. Tells us exactly
+                // what the RendererFeature is (or isn't) capturing:
+                //   - opaque gray matching the Figma source → feature isn't
+                //     running or Canvas is ScreenSpace-Overlay (URP can't
+                //     capture Overlay UI from a camera pass)
+                //   - the character image visible inside the rectangle → UI
+                //     is captured correctly; HSL math is the next suspect
+                //   - black → _UISceneColor global is unbound entirely
+                // Once verified we switch back to the HSL blend path below.
+                return half4(dst, src.a);
+
                 // Figma COLOR blend: replace destination's hue+saturation with
                 // source's, keep destination's luminance.
-                float3 srcHsl = RgbToHsl(saturate(src.rgb));
-                float3 dstHsl = RgbToHsl(saturate(dst));
-                float3 blended = HslToRgb(float3(srcHsl.x, srcHsl.y, dstHsl.z));
-
-                // Alpha blend the chroma-replaced pixel over destination by src.a.
-                // Output RGB is the final composite; alpha uses src.a with the
-                // usual UGUI modulations so the shader plays nice with Canvas
-                // transparency and masks.
-                half3 outRgb = lerp(dst, blended, src.a);
-                half4 color = half4(outRgb, src.a);
-
-                #ifdef UNITY_UI_CLIP_RECT
-                color.a *= UnityGet2DClipping(IN.worldPosition.xy, _ClipRect);
-                #endif
-
-                #ifdef UNITY_UI_ALPHACLIP
-                clip(color.a - 0.001);
-                #endif
-
-                return color;
+                // float3 srcHsl = RgbToHsl(saturate(src.rgb));
+                // float3 dstHsl = RgbToHsl(saturate(dst));
+                // float3 blended = HslToRgb(float3(srcHsl.x, srcHsl.y, dstHsl.z));
+                // half3 outRgb = lerp(dst, blended, src.a);
+                // half4 color = half4(outRgb, src.a);
+                // #ifdef UNITY_UI_CLIP_RECT
+                // color.a *= UnityGet2DClipping(IN.worldPosition.xy, _ClipRect);
+                // #endif
+                // #ifdef UNITY_UI_ALPHACLIP
+                // clip(color.a - 0.001);
+                // #endif
+                // return color;
             }
             ENDCG
         }

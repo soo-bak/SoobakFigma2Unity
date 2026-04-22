@@ -189,14 +189,26 @@ namespace SoobakFigma2Unity.Editor.Converters
 
             var assetPath = $"{MaterialFolder}/{SanitizeShaderName(shaderName)}.mat";
 
+            var shader = Shader.Find(shaderName);
+
             var mat = AssetDatabase.LoadAssetAtPath<Material>(assetPath);
             if (mat != null)
             {
+                // A .mat saved while its shader was missing / broken serializes with
+                // shader = {fileID: 0}, which Unity surfaces as Hidden/InternalErrorShader.
+                // Once the shader is fixed we have to re-bind explicitly — Unity never
+                // revisits a null reference on its own. Do it every load so the material
+                // self-heals without the user having to delete and recreate it.
+                if (shader != null && mat.shader != shader)
+                {
+                    mat.shader = shader;
+                    EditorUtility.SetDirty(mat);
+                    AssetDatabase.SaveAssets();
+                }
                 _materialCache[shaderName] = mat;
                 return mat;
             }
 
-            var shader = Shader.Find(shaderName);
             if (shader == null) return null;
 
             AssetFolderUtil.EnsureFolder(MaterialFolder);

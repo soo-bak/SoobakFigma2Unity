@@ -87,6 +87,15 @@ namespace SoobakFigma2Unity.Editor.URP
             foreach (var guid in guids)
             {
                 var path = AssetDatabase.GUIDToAssetPath(guid);
+                // Skip package-internal renderer templates. URP ships a default
+                // `UniversalRendererData.asset` inside the Universal RP package
+                // that should never be modified — Unity logs a stern warning when
+                // an immutable package asset is altered, and Package Manager may
+                // revert the change without notice. Only install on project-local
+                // renderers under Assets/.
+                if (!path.StartsWith("Assets/", System.StringComparison.Ordinal))
+                    continue;
+
                 var rd = AssetDatabase.LoadAssetAtPath<ScriptableRendererData>(path);
                 if (rd != null) results.Add(rd);
             }

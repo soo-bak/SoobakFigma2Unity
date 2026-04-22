@@ -29,7 +29,27 @@ namespace SoobakFigma2Unity.Editor.Layout
         public static Vector2 GetSize(FigmaNode node)
         {
             if (node.AbsoluteBoundingBox != null)
-                return new Vector2(node.AbsoluteBoundingBox.Width, node.AbsoluteBoundingBox.Height);
+            {
+                float w = node.AbsoluteBoundingBox.Width;
+                float h = node.AbsoluteBoundingBox.Height;
+
+                // Vector paths with zero thickness on one axis (a horizontal or
+                // vertical stroke, e.g. a 4-px dotted divider) report a degenerate
+                // bounding box — width or height = 0 — because Figma's bbox is the
+                // geometric path extent and ignores stroke. The actual rendered
+                // extent (stroke included) is in absoluteRenderBounds. Without this
+                // fallback the element would land in Unity with sizeDelta.y = 0
+                // and the LayoutElement that the auto-layout mapper attaches would
+                // get preferredHeight = 0, hiding the row entirely.
+                if (node.AbsoluteRenderBounds != null)
+                {
+                    if (w <= 0f && node.AbsoluteRenderBounds.Width > 0f)
+                        w = node.AbsoluteRenderBounds.Width;
+                    if (h <= 0f && node.AbsoluteRenderBounds.Height > 0f)
+                        h = node.AbsoluteRenderBounds.Height;
+                }
+                return new Vector2(w, h);
+            }
             if (node.Size != null)
                 return new Vector2(node.Size.X, node.Size.Y);
             return Vector2.zero;

@@ -83,10 +83,11 @@ namespace SoobakFigma2Unity.Editor.URP
             added = false;
             if (rd == null) return false;
 
-            // Skip 2D renderer — Figma UI prefabs go through a 3D-style URP Universal
-            // Renderer; adding the feature to a 2D renderer is unnecessary.
-            if (rd.GetType().Name == "Renderer2DData")
-                return true;
+            // Install on every ScriptableRendererData type including Renderer2DData.
+            // URP projects routinely use the 2D renderer as their primary renderer
+            // (that's what the test project does for Desktop_Ultra and Mobile_Low),
+            // and a ScriptableRendererFeature hosted by Renderer2DData runs through
+            // Render Graph with the same UniversalResourceData hooks we rely on.
 
             if (rd.rendererFeatures.Any(f => f is UISceneColorCopyFeature))
                 return true;

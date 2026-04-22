@@ -1,12 +1,11 @@
-// URP UGUI shader implementing Figma's "Appearance = Color" (HSL chroma blend):
+// URP UGUI shader — Figma "Appearance = Color" (HSL chroma blend):
 //   result.rgb = HslToRgb(src.hue, src.saturation, dst.luminance)
 //
-// Source comes from the regular UGUI sprite × tint. Destination comes from the
-// global texture _UISceneColor that UISceneColorCopyFeature blits each frame
-// (URP RendererFeature, AfterRenderingTransparents). Material queue is
-// bumped (Transparent + 50) so the sample is meaningful.
+// Source: regular UGUI sprite × tint pipeline.
+// Destination: global texture _UISceneColor that UISceneColorCopyFeature
+//              blits each frame from the active camera color buffer.
 //
-// URP-only. GrabPass / BiRP path was removed by design.
+// URP-only. Built-in RP / GrabPass path is not supported by design.
 Shader "SoobakFigma2Unity/URP/BlendColor"
 {
     Properties
@@ -59,8 +58,10 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
             #pragma fragment frag
             #pragma target 2.0
 
-            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
-            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/SpaceTransforms.hlsl"
+            // URP umbrella header — pulls in Common, SpaceTransforms,
+            // ShaderVariablesFunctions (defines ComputeScreenPos), Macros
+            // (defines TRANSFORM_TEX), etc.
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
             struct Attributes
             {
@@ -86,9 +87,12 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
             CBUFFER_START(UnityPerMaterial)
                 float4 _MainTex_ST;
                 half4  _Color;
-                half4  _TextureSampleAdd;
                 float4 _ClipRect;
             CBUFFER_END
+
+            // Set per-renderer by UGUI for distance-field text. Plain Image leaves
+            // it at zero, so kept outside the SRP-batched material CBUFFER.
+            half4 _TextureSampleAdd;
 
             Varyings vert(Attributes IN)
             {
@@ -101,7 +105,7 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
                 return OUT;
             }
 
-            // ---- HSL helpers (Figma-matching color picker space) ----
+            // ---- HSL helpers (Figma-matching colour-picker space) ----
 
             float3 RgbToHsl(float3 c)
             {
@@ -145,8 +149,9 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
                 );
             }
 
-            // 2D UI rect clip (UGUI's _ClipRect is xyzw = minX, minY, maxX, maxY in
-            // worldPos.xy space, set by Mask / RectMask2D / Canvas).
+            // UGUI's Mask / RectMask2D supplies _ClipRect = (minX, minY, maxX, maxY)
+            // in worldPos.xy space. Inline the rect-test so we don't need
+            // UnityUI.cginc (CGPROGRAM-only).
             half ClipUI(float2 worldXY)
             {
                 float2 ge = step(_ClipRect.xy, worldXY);
@@ -164,7 +169,7 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
                 float3 srcHsl = RgbToHsl(saturate(src.rgb));
                 float3 dstHsl = RgbToHsl(saturate(dst.rgb));
 
-                // Figma COLOR: keep destination luminance, apply source hue & saturation.
+                // Figma COLOR: keep destination luminance, apply source hue + saturation.
                 float3 blended = HslToRgb(float3(srcHsl.x, srcHsl.y, dstHsl.z));
 
                 half4 outCol = half4(blended, src.a);

@@ -1,11 +1,17 @@
-// URP UGUI shader — Figma "Appearance = Color" (HSL chroma blend):
+// URP-compatible UGUI shader implementing Figma's "Appearance = Color"
+// (HSL chroma blend):
 //   result.rgb = HslToRgb(src.hue, src.saturation, dst.luminance)
 //
 // Source: regular UGUI sprite × tint pipeline.
 // Destination: global texture _UISceneColor that UISceneColorCopyFeature
 //              blits each frame from the active camera color buffer.
 //
-// URP-only. Built-in RP / GrabPass path is not supported by design.
+// CGPROGRAM is intentional — Unity's compatibility layer compiles it under
+// URP just fine (UIEffect uses the same approach). HLSLPROGRAM + URP HLSL
+// includes turned out to be brittle for UGUI (CBUFFER batching / deprecated
+// helpers / variant gaps), and UGUI itself ships with CG-style shaders.
+// Only GrabPass is URP-incompatible, and we never use it — destination is
+// fed via the RendererFeature.
 Shader "SoobakFigma2Unity/URP/BlendColor"
 {
     Properties
@@ -19,6 +25,11 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
         _StencilWriteMask ("Stencil Write Mask", Float) = 255
         _StencilReadMask ("Stencil Read Mask", Float) = 255
         _ColorMask ("Color Mask", Float) = 15
+
+        // Declared as a property so the material has a sane default ("white") if
+        // the RendererFeature hasn't bound the global yet (first frame, scene-view
+        // preview, etc.). The feature overrides it once per frame at runtime.
+        [HideInInspector] _UISceneColor ("UI Scene Color", 2D) = "white" {}
     }
 
     SubShader
@@ -30,7 +41,6 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
             "RenderType"="Transparent"
             "PreviewType"="Plane"
             "CanUseSpriteAtlas"="True"
-            "RenderPipeline"="UniversalPipeline"
         }
 
         Stencil
@@ -53,67 +63,54 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
         {
             Name "Default"
 
-            HLSLPROGRAM
+            CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
             #pragma target 2.0
 
-            // URP umbrella header — pulls in Common, SpaceTransforms,
-            // ShaderVariablesFunctions (defines ComputeScreenPos), Macros
-            // (defines TRANSFORM_TEX), etc.
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "UnityCG.cginc"
+            #include "UnityUI.cginc"
 
-            struct Attributes
+            struct appdata_t
             {
-                float4 positionOS : POSITION;
-                float4 color      : COLOR;
-                float2 uv         : TEXCOORD0;
+                float4 vertex   : POSITION;
+                float4 color    : COLOR;
+                float2 texcoord : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
-            struct Varyings
+            struct v2f
             {
-                float4 positionCS  : SV_POSITION;
-                half4  color       : COLOR;
-                float2 uv          : TEXCOORD0;
-                float4 worldPos    : TEXCOORD1;
-                float4 positionNDC : TEXCOORD2;
+                float4 vertex        : SV_POSITION;
+                fixed4 color         : COLOR;
+                float2 texcoord      : TEXCOORD0;
+                float4 worldPosition : TEXCOORD1;
+                float4 screenPos     : TEXCOORD2;
+                UNITY_VERTEX_OUTPUT_STEREO
             };
 
-            TEXTURE2D(_MainTex);
-            SAMPLER(sampler_MainTex);
-            TEXTURE2D(_UISceneColor);
-            SAMPLER(sampler_UISceneColor);
+            sampler2D _MainTex;
+            sampler2D _UISceneColor;
+            float4    _MainTex_ST;
+            fixed4    _Color;
+            fixed4    _TextureSampleAdd;
+            float4    _ClipRect;
 
-            CBUFFER_START(UnityPerMaterial)
-                float4 _MainTex_ST;
-                half4  _Color;
-            CBUFFER_END
-
-            // Per-renderer values, set by UGUI's MaskableGraphic / TMP at draw time.
-            // They MUST live outside UnityPerMaterial — otherwise the SRP batcher
-            // refuses to batch (it assumes per-material values are constant) and
-            // shader compilation may fall back to the URP error path (magenta).
-            float4 _ClipRect;
-            half4  _TextureSampleAdd;
-
-            Varyings vert(Attributes IN)
+            v2f vert(appdata_t v)
             {
-                Varyings OUT = (Varyings)0;
-                OUT.worldPos = IN.positionOS;
+                v2f o;
+                UNITY_SETUP_INSTANCE_ID(v);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
 
-                // GetVertexPositionInputs is the URP-canonical way to compute clip and
-                // NDC positions in one call. positionNDC replaces the deprecated
-                // ComputeScreenPos / UnityCG path.
-                VertexPositionInputs posIn = GetVertexPositionInputs(IN.positionOS.xyz);
-                OUT.positionCS  = posIn.positionCS;
-                OUT.positionNDC = posIn.positionNDC;
-
-                OUT.uv    = TRANSFORM_TEX(IN.uv, _MainTex);
-                OUT.color = IN.color * _Color;
-                return OUT;
+                o.worldPosition = v.vertex;
+                o.vertex   = UnityObjectToClipPos(v.vertex);
+                o.texcoord = TRANSFORM_TEX(v.texcoord, _MainTex);
+                o.color    = v.color * _Color;
+                o.screenPos = ComputeScreenPos(o.vertex);
+                return o;
             }
 
-            // ---- HSL helpers (Figma-matching colour-picker space) ----
+            // ---- HSL helpers (matches Figma's colour-picker space) ----
 
             float3 RgbToHsl(float3 c)
             {
@@ -157,22 +154,12 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
                 );
             }
 
-            // UGUI's Mask / RectMask2D supplies _ClipRect = (minX, minY, maxX, maxY)
-            // in worldPos.xy space. Inline the rect-test so we don't need
-            // UnityUI.cginc (CGPROGRAM-only).
-            half ClipUI(float2 worldXY)
+            fixed4 frag(v2f i) : SV_Target
             {
-                float2 ge = step(_ClipRect.xy, worldXY);
-                float2 le = step(worldXY, _ClipRect.zw);
-                return ge.x * ge.y * le.x * le.y;
-            }
+                fixed4 src = (tex2D(_MainTex, i.texcoord) + _TextureSampleAdd) * i.color;
 
-            half4 frag(Varyings IN) : SV_Target
-            {
-                half4 src = (SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, IN.uv) + _TextureSampleAdd) * IN.color;
-
-                float2 screenUV = IN.positionNDC.xy / max(IN.positionNDC.w, 1e-5);
-                half4 dst = SAMPLE_TEXTURE2D(_UISceneColor, sampler_UISceneColor, screenUV);
+                float2 screenUV = i.screenPos.xy / max(i.screenPos.w, 1e-5);
+                fixed4 dst = tex2D(_UISceneColor, screenUV);
 
                 float3 srcHsl = RgbToHsl(saturate(src.rgb));
                 float3 dstHsl = RgbToHsl(saturate(dst.rgb));
@@ -180,11 +167,11 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
                 // Figma COLOR: keep destination luminance, apply source hue + saturation.
                 float3 blended = HslToRgb(float3(srcHsl.x, srcHsl.y, dstHsl.z));
 
-                half4 outCol = half4(blended, src.a);
-                outCol.a *= ClipUI(IN.worldPos.xy);
+                fixed4 outCol = fixed4(blended, src.a);
+                outCol.a *= UnityGet2DClipping(i.worldPosition.xy, _ClipRect);
                 return outCol;
             }
-            ENDHLSL
+            ENDCG
         }
     }
 

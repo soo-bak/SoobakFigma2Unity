@@ -1,14 +1,12 @@
 // URP UGUI shader implementing Figma's "Appearance = Color" (HSL chroma blend):
 //   result.rgb = HslToRgb(src.hue, src.saturation, dst.luminance)
 //
-// Source comes from the regular UGUI sprite × tint pipeline. Destination comes
-// from the global texture _UISceneColor that UISceneColorCopyFeature blits into
-// once per frame (URP RendererFeature, AfterRenderingTransparents). Material
-// queue is bumped slightly so this shader renders late enough that the copy can
-// be relied on for the prior frame's content.
+// Source comes from the regular UGUI sprite × tint. Destination comes from the
+// global texture _UISceneColor that UISceneColorCopyFeature blits each frame
+// (URP RendererFeature, AfterRenderingTransparents). Material queue is
+// bumped (Transparent + 50) so the sample is meaningful.
 //
-// Built-in RP is intentionally not supported here — that path used GrabPass and
-// the user opted in to URP-only tooling.
+// URP-only. GrabPass / BiRP path was removed by design.
 Shader "SoobakFigma2Unity/URP/BlendColor"
 {
     Properties
@@ -22,8 +20,6 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
         _StencilWriteMask ("Stencil Write Mask", Float) = 255
         _StencilReadMask ("Stencil Read Mask", Float) = 255
         _ColorMask ("Color Mask", Float) = 15
-
-        [Toggle(UNITY_UI_ALPHACLIP)] _UseUIAlphaClip ("Use Alpha Clip", Float) = 0
     }
 
     SubShader
@@ -52,8 +48,6 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
         ZWrite Off
         ZTest [unity_GUIZTestMode]
         ColorMask [_ColorMask]
-
-        // Output the HSL-blended color modulated by the source alpha.
         Blend SrcAlpha OneMinusSrcAlpha
 
         Pass
@@ -65,56 +59,49 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
             #pragma fragment frag
             #pragma target 2.0
 
-            #pragma multi_compile_local _ UNITY_UI_CLIP_RECT
-            #pragma multi_compile_local _ UNITY_UI_ALPHACLIP
-
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-            #include "UnityCG.cginc"
-            #include "UnityUI.cginc"
+            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
+            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/SpaceTransforms.hlsl"
 
             struct Attributes
             {
-                float4 vertex   : POSITION;
-                float4 color    : COLOR;
-                float2 texcoord : TEXCOORD0;
-                UNITY_VERTEX_INPUT_INSTANCE_ID
+                float4 positionOS : POSITION;
+                float4 color      : COLOR;
+                float2 uv         : TEXCOORD0;
             };
 
             struct Varyings
             {
-                float4 vertex        : SV_POSITION;
-                fixed4 color         : COLOR;
-                float2 texcoord      : TEXCOORD0;
-                float4 worldPosition : TEXCOORD1;
-                float4 screenPos     : TEXCOORD2;
-                UNITY_VERTEX_OUTPUT_STEREO
+                float4 positionCS : SV_POSITION;
+                half4  color      : COLOR;
+                float2 uv         : TEXCOORD0;
+                float4 worldPos   : TEXCOORD1;
+                float4 screenPos  : TEXCOORD2;
             };
 
-            sampler2D _MainTex;
-            fixed4    _Color;
-            fixed4    _TextureSampleAdd;
-            float4    _ClipRect;
-            float4    _MainTex_ST;
+            TEXTURE2D(_MainTex);
+            SAMPLER(sampler_MainTex);
+            TEXTURE2D(_UISceneColor);
+            SAMPLER(sampler_UISceneColor);
 
-            // Filled in by UISceneColorCopyFeature once per frame (URP RendererFeature).
-            // Holds the camera color buffer captured AfterRenderingTransparents.
-            sampler2D _UISceneColor;
+            CBUFFER_START(UnityPerMaterial)
+                float4 _MainTex_ST;
+                half4  _Color;
+                half4  _TextureSampleAdd;
+                float4 _ClipRect;
+            CBUFFER_END
 
-            Varyings vert(Attributes v)
+            Varyings vert(Attributes IN)
             {
-                Varyings o = (Varyings)0;
-                UNITY_SETUP_INSTANCE_ID(v);
-                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
-
-                o.worldPosition = v.vertex;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-                o.texcoord = TRANSFORM_TEX(v.texcoord, _MainTex);
-                o.color = v.color * _Color;
-                o.screenPos = ComputeScreenPos(o.vertex);
-                return o;
+                Varyings OUT = (Varyings)0;
+                OUT.worldPos   = IN.positionOS;
+                OUT.positionCS = TransformObjectToHClip(IN.positionOS.xyz);
+                OUT.uv         = TRANSFORM_TEX(IN.uv, _MainTex);
+                OUT.color      = IN.color * _Color;
+                OUT.screenPos  = ComputeScreenPos(OUT.positionCS);
+                return OUT;
             }
 
-            // ---- HSL helpers (working space matches Figma's color picker) ----
+            // ---- HSL helpers (Figma-matching color picker space) ----
 
             float3 RgbToHsl(float3 c)
             {
@@ -158,15 +145,21 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
                 );
             }
 
-            fixed4 frag(Varyings i) : SV_Target
+            // 2D UI rect clip (UGUI's _ClipRect is xyzw = minX, minY, maxX, maxY in
+            // worldPos.xy space, set by Mask / RectMask2D / Canvas).
+            half ClipUI(float2 worldXY)
             {
-                // Source: sprite × tint × per-vertex color
-                fixed4 src = (tex2D(_MainTex, i.texcoord) + _TextureSampleAdd) * i.color;
+                float2 ge = step(_ClipRect.xy, worldXY);
+                float2 le = step(worldXY, _ClipRect.zw);
+                return ge.x * ge.y * le.x * le.y;
+            }
 
-                // Destination: camera color captured by UISceneColorCopyFeature.
-                // Project the screen-space position into [0,1] sample coords.
-                float2 screenUV = i.screenPos.xy / max(i.screenPos.w, 1e-5);
-                fixed4 dst = tex2D(_UISceneColor, screenUV);
+            half4 frag(Varyings IN) : SV_Target
+            {
+                half4 src = (SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, IN.uv) + _TextureSampleAdd) * IN.color;
+
+                float2 screenUV = IN.screenPos.xy / max(IN.screenPos.w, 1e-5);
+                half4 dst = SAMPLE_TEXTURE2D(_UISceneColor, sampler_UISceneColor, screenUV);
 
                 float3 srcHsl = RgbToHsl(saturate(src.rgb));
                 float3 dstHsl = RgbToHsl(saturate(dst.rgb));
@@ -174,16 +167,8 @@ Shader "SoobakFigma2Unity/URP/BlendColor"
                 // Figma COLOR: keep destination luminance, apply source hue & saturation.
                 float3 blended = HslToRgb(float3(srcHsl.x, srcHsl.y, dstHsl.z));
 
-                fixed4 outCol = fixed4(blended, src.a);
-
-                #ifdef UNITY_UI_CLIP_RECT
-                outCol.a *= UnityGet2DClipping(i.worldPosition.xy, _ClipRect);
-                #endif
-
-                #ifdef UNITY_UI_ALPHACLIP
-                clip(outCol.a - 0.001);
-                #endif
-
+                half4 outCol = half4(blended, src.a);
+                outCol.a *= ClipUI(IN.worldPos.xy);
                 return outCol;
             }
             ENDHLSL

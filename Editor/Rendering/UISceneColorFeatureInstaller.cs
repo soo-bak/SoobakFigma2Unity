@@ -25,13 +25,14 @@ namespace SoobakFigma2Unity.Editor.URP
 
         static UISceneColorFeatureInstaller()
         {
+            Debug.Log("[SoobakFigma2Unity] UISceneColorFeatureInstaller static ctor fired (domain load).");
             EditorApplication.delayCall += AutoInstall;
         }
 
         private static void AutoInstall()
         {
             EditorApplication.delayCall -= AutoInstall;
-            Install(verbose: false);
+            Install(verbose: true);
         }
 
         [MenuItem(MenuPath)]
@@ -39,29 +40,34 @@ namespace SoobakFigma2Unity.Editor.URP
 
         private static void Install(bool verbose)
         {
-            var rendererDatas = FindAllRendererData();
-            if (rendererDatas.Count == 0)
+            try
             {
-                if (verbose)
-                    Debug.LogWarning("[SoobakFigma2Unity] No URP ScriptableRendererData assets found in project.");
-                return;
-            }
-
-            int installed = 0, alreadyPresent = 0;
-            foreach (var rd in rendererDatas)
-            {
-                if (TryEnsureFeature(rd, out var added))
+                var rendererDatas = FindAllRendererData();
+                Debug.Log($"[SoobakFigma2Unity] Install: found {rendererDatas.Count} ScriptableRendererData asset(s).");
+                if (rendererDatas.Count == 0)
                 {
-                    if (added) installed++;
-                    else alreadyPresent++;
+                    Debug.LogWarning("[SoobakFigma2Unity] No URP ScriptableRendererData assets found in project.");
+                    return;
                 }
-            }
 
-            if (verbose || installed > 0)
-            {
+                int installed = 0, alreadyPresent = 0;
+                foreach (var rd in rendererDatas)
+                {
+                    Debug.Log($"[SoobakFigma2Unity] Processing '{rd.name}' ({rd.GetType().Name}, {rd.rendererFeatures.Count} existing feature(s))");
+                    if (TryEnsureFeature(rd, out var added))
+                    {
+                        if (added) installed++;
+                        else alreadyPresent++;
+                    }
+                }
+
                 Debug.Log($"[SoobakFigma2Unity] URP Color-blend feature install: " +
                           $"{installed} added, {alreadyPresent} already present, " +
                           $"{rendererDatas.Count} renderers checked.");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[SoobakFigma2Unity] Installer threw: {e}");
             }
         }
 

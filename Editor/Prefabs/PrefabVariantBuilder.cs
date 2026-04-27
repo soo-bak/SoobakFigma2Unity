@@ -121,11 +121,15 @@ namespace SoobakFigma2Unity.Editor.Prefabs
 
         /// <summary>
         /// Apply visual differences from source (variant) onto target (base prefab instance).
-        /// Recursive name-based matching with three structural cases:
-        ///   • Both have the named child  → recurse, copy property overrides
-        ///   • Variant has it, base doesn't → instantiate the source subtree under target
-        ///   • Base has it, variant doesn't → SetActive(false) on the base child so the
-        ///                                    layout doesn't show a leftover ghost from base
+        /// Recurses by name; copies property overrides on every match. Structural diffs —
+        /// children present in only one of the two trees — are flagged in the log and left
+        /// alone for now. The previous attempt to UnityEngine.Object.Instantiate variant-only
+        /// subtrees into the base prefab triggered a Unity assertion on save when the cloned
+        /// subtree contained a nested PrefabInstance, because the freshly-cloned objects
+        /// inherit DontSaveInEditor flags from the source's editor-only state. The right fix
+        /// is to either (a) extract structurally-distinct variants as independent prefabs
+        /// instead of forcing them into a Variant chain, or (b) clone via SerializedObject
+        /// so the prefab payload stays save-safe — both deferred to a follow-up pass.
         /// </summary>
         private void ApplyOverrides(GameObject target, GameObject source)
         {
@@ -144,7 +148,6 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 sourceChildren[c.name] = c;
             }
 
-            // Variant children: recurse into matched, clone in unmatched.
             for (int i = 0; i < source.transform.childCount; i++)
             {
                 var sourceChild = source.transform.GetChild(i);
@@ -154,24 +157,14 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 }
                 else
                 {
-                    // Variant has a child that the base prefab doesn't. Clone the source
-                    // subtree under target — Unity's Prefab Variant system records added
-                    // GameObjects as variant-local additions, so they show up only on
-                    // this variant prefab and don't leak back to base.
-                    var added = UnityEngine.Object.Instantiate(sourceChild.gameObject, target.transform);
-                    added.name = sourceChild.name;
+                    _logger?.Warn($"Variant '{source.name}' has a child '{sourceChild.name}' the base prefab doesn't — skipping (structural variant; will look incorrect until promoted to an independent prefab).");
                 }
             }
 
-            // Base-only children: hide them. Unity Prefab Variants can't remove an
-            // inherited GameObject — disabling is the closest non-destructive equivalent
-            // and keeps SmartMerge round-tripping safe (a future re-import that re-adds
-            // the variant child can flip SetActive back on).
             foreach (var pair in targetChildren)
             {
                 if (sourceChildren.ContainsKey(pair.Key)) continue;
-                var go = pair.Value.gameObject;
-                if (go.activeSelf) go.SetActive(false);
+                _logger?.Warn($"Variant '{source.name}' is missing base child '{pair.Key}' — leaving it visible (structural variant).");
             }
         }
 

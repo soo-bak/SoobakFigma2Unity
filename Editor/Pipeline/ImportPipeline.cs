@@ -623,34 +623,18 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 && ctx.Profile.RasterizeAtomicVisualGroups
                 && IsAtomicVisualGroup(node);
 
-            // Composite container: mixed text + visuals (decoratives and/or nested
-            // INSTANCEs). We do NOT bake the container as one PNG (that would include
-            // text and produce a baked-text artefact behind the TMP overlay). Instead
-            // each visual leaf gets rasterised individually, and CompositeBuilder
-            // alpha-blends them into one container-sized PNG after download. Each TEXT
-            // descendant becomes an editable TMP overlaid on the composite.
-            //
-            // Force-add every visual leaf to NodesToRasterize here. The recursive walk
-            // would catch most decoratives via NeedsRasterization, but it WOULDN'T catch
-            // nested INSTANCEs (the container guard inside NeedsRasterization rejects
-            // INSTANCEs that have their own children, which is the common case). Without
-            // this explicit add, the composite would be missing the INSTANCE layers.
+            // Composite container: mixed text + decoratives, no nested INSTANCE. We do NOT
+            // bake the container as one PNG (that would include the text and produce a
+            // baked-text artefact behind the TMP overlay). Instead let each decorative
+            // leaf get rasterised individually (via the recursive walk), then later we'll
+            // CPU-composite those leaves into one container-sized background PNG and
+            // overlay each TEXT descendant as an editable TMP. Just record the container
+            // id here; the actual compositing runs after image download lands.
             bool compositeContainer = ctx.Profile != null
                 && ctx.Profile.RasterizeAtomicVisualGroups
                 && IsCompositeContainer(node);
             if (compositeContainer)
-            {
                 ctx.CompositeContainerIds.Add(node.Id);
-                var leaves = new List<FigmaNode>();
-                CollectDecorativeLeaves(node, leaves);
-                foreach (var leaf in leaves)
-                {
-                    if (string.IsNullOrEmpty(leaf.Id)) continue;
-                    ctx.NodesToRasterize.Add(leaf.Id);
-                    if (!ctx.NodeRasterBoundsModes.ContainsKey(leaf.Id))
-                        ctx.NodeRasterBoundsModes[leaf.Id] = ChooseRasterBoundsMode(leaf);
-                }
-            }
 
             bool needsRaster = atomicVisualGroup || NodeConverterRegistry.NeedsRasterization(node);
             if (needsRaster)
@@ -714,30 +698,20 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         }
 
         // A "composite container" is the mixed case: a FRAME / GROUP / INSTANCE that holds
-        // BOTH text descendants AND visual descendants (decorative primitives OR nested
-        // INSTANCEs). We can't bake the whole thing as one PNG because Figma's render
-        // would include the text and the user explicitly forbids baked-text bleeding
-        // through any TMP overlay.
+        // BOTH text descendants AND decorative descendants (no nested INSTANCE). We can't
+        // bake the whole thing as one PNG because Figma's render would include the text
+        // and the user explicitly forbids baked-text bleeding through any TMP overlay.
         //
         // Instead the pipeline:
-        //   1. Lets each visual leaf get rasterised individually — decorative primitives
-        //      via NeedsRasterization, nested INSTANCEs via Figma's render of the
-        //      INSTANCE node (we already collect them).
-        //   2. After the downloads land, CompositeBuilder alpha-blends the visual
+        //   1. Lets each decorative leaf get rasterised individually (via the normal walk).
+        //   2. After the downloads land, CompositeBuilder alpha-blends the decorative
         //      leaves into one container-sized PNG at their relative positions — text
         //      not included.
         //   3. ConvertNodeToGameObject for the container places that single Image, then
         //      walks only the TEXT descendants and creates them as editable TMP children.
         //
-        // Trade-off for nested INSTANCE descendants: they get baked into the composite
-        // and lose their PrefabInstance linkage. For external-library instances (which
-        // the auto-extract path skips anyway) this loses nothing — they were going to
-        // inline as raw pixels regardless. For internal instances, the user can disable
-        // RasterizeAtomicVisualGroups to recover separate prefab references, accepting
-        // the compositing drift in return.
-        //
-        // The visible result: pixel-accurate visual composite from Figma, text editable,
-        // zero risk of baked-text artefact behind the TMP.
+        // The visible result: pixel-accurate decorative composite from Figma, text
+        // editable, zero risk of baked-text artefact behind the TMP.
         private static bool IsCompositeContainer(FigmaNode node)
         {
             if (node == null || !node.HasChildren) return false;
@@ -745,14 +719,25 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (t != FigmaNodeType.FRAME && t != FigmaNodeType.GROUP && t != FigmaNodeType.INSTANCE)
                 return false;
             bool hasText = false;
-            bool hasVisual = false;
+            bool hasDecorative = false;
             foreach (var child in node.Children)
             {
+                if (HasInstanceDescendantInternal(child)) return false;
                 if (HasTextDescendantInternal(child)) hasText = true;
-                if (HasVisualDescendantInternal(child)) hasVisual = true;
-                if (hasText && hasVisual) break;
+                if (HasDecorativeDescendantInternal(child)) hasDecorative = true;
+                if (hasText && hasDecorative) break;
             }
-            return hasText && hasVisual;
+            return hasText && hasDecorative;
+        }
+
+        private static bool HasInstanceDescendantInternal(FigmaNode node)
+        {
+            if (node == null) return false;
+            if (node.NodeType == FigmaNodeType.INSTANCE) return true;
+            if (node.Children != null)
+                foreach (var c in node.Children)
+                    if (HasInstanceDescendantInternal(c)) return true;
+            return false;
         }
 
         private static bool HasTextDescendantInternal(FigmaNode node)
@@ -765,48 +750,30 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             return false;
         }
 
-        // A visual descendant is anything that contributes pixels we'd want to bake
-        // into the composite — decorative primitives OR nested INSTANCEs. INSTANCEs
-        // qualify because Figma will rasterise them as their own PNGs (the standard
-        // pipeline already does this) and we can blend those PNGs into the composite
-        // at the instance's offset within the container.
-        private static bool HasVisualDescendantInternal(FigmaNode node)
+        private static bool HasDecorativeDescendantInternal(FigmaNode node)
         {
             if (node == null) return false;
             var t = node.NodeType;
-            if (t == FigmaNodeType.TEXT) return false;
-            if (t == FigmaNodeType.INSTANCE) return true;
+            if (t == FigmaNodeType.TEXT || t == FigmaNodeType.INSTANCE) return false;
             if (NodeConverterRegistry.NeedsRasterization(node)) return true;
             if (node.Children != null)
                 foreach (var c in node.Children)
-                    if (HasVisualDescendantInternal(c)) return true;
+                    if (HasDecorativeDescendantInternal(c)) return true;
             return false;
         }
 
-        // Visual leaves of a composite container — every node that gets its own PNG
-        // export and contributes a layer to the CPU composite. INSTANCEs of other
-        // components count: Figma will render them as their own PNG, and we blit that
-        // into the composite at the instance's offset (the instance's prefab linkage
-        // is lost in exchange — its visual is now baked into the parent composite).
-        // Walks depth-first so the caller can process leaves in Figma's document order
-        // (= z-order, bottom first).
+        // Decorative leaves of a composite container — every node that gets its own PNG
+        // export and contributes a layer to the CPU composite. Walks depth-first so the
+        // caller can process them in Figma's document order (= z-order, bottom first).
         internal static void CollectDecorativeLeaves(FigmaNode node, System.Collections.Generic.List<FigmaNode> output)
         {
             if (node == null) return;
             var t = node.NodeType;
-            if (t == FigmaNodeType.TEXT) return;
-            if (t == FigmaNodeType.INSTANCE)
-            {
-                // Each INSTANCE bakes as its own PNG layer in the composite. Don't dive
-                // into the instance's children — Figma's render of the INSTANCE already
-                // captures everything visible inside it.
-                if (node.AbsoluteBoundingBox != null) output.Add(node);
-                return;
-            }
+            if (t == FigmaNodeType.TEXT || t == FigmaNodeType.INSTANCE) return;
             if (NodeConverterRegistry.NeedsRasterization(node) && node.AbsoluteBoundingBox != null)
             {
                 output.Add(node);
-                return;
+                return; // node is rasterised as one unit; don't dive deeper
             }
             if (node.Children != null)
                 foreach (var c in node.Children)

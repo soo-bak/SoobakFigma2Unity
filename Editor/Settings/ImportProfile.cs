@@ -75,31 +75,31 @@ namespace SoobakFigma2Unity.Editor.Settings
         public string ComponentOutputPath = "Assets/UI/Components";
         public bool ExtractFigmaComponentsAsPrefabs = true;
 
-        // FLAT rasterisation per-COMPONENT.
+        // FLAT rasterisation per atomic-visual-group.
         //
-        // When true, every Figma COMPONENT in the import tree is exported as a
-        // single PNG of the *whole* component (everything inside baked together —
-        // background, strokes, inner rectangles, text, the works) and the resulting
-        // Unity prefab is just one GameObject with one Image. No recursive walk of
-        // the COMPONENT's children, no per-rectangle sprites composited by UGUI.
+        // When true, any FRAME / GROUP / INSTANCE whose entire descendant tree is
+        // purely decorative (no TEXT nodes, no nested INSTANCEs — only rectangles,
+        // vectors, ellipses, etc.) is exported as a single PNG and lands as one
+        // GameObject with one Image. Containers that include text or other
+        // instances stay structural so the text remains an editable
+        // TextMeshProUGUI and nested instances keep their own prefab links.
         //
         // Why this matters: Figma's compositing (alpha, blend modes, mask
         // intersections, stroke offsets, drop-shadow under/over rules) does not
-        // match UGUI's. Even when every individual element exports correctly the
+        // match UGUI's. Even when each individual element exports correctly the
         // assembled visual drifts — wavy lines flatten, strokes clip, layers mis-
-        // overlap. A single PNG sidesteps the entire compositing question because
-        // Figma rendered the final frame itself.
+        // overlap. Folding decorative groups into a single PNG sidesteps the
+        // compositing question for the parts that don't need editing while
+        // preserving the editability of the parts that do.
         //
-        // Trade-off: the prefab loses editability of inner elements (text is baked
-        // pixels, not a TextMeshProUGUI). For static design fidelity this is the
-        // correct trade. For dynamic UI (per-instance text, runtime tinting),
-        // disable this and accept the compositing drift, or design the dynamic
-        // parts as their own Figma components and assemble them in Unity.
+        // Concrete win: a button variant whose `bg_slice` decorative instance
+        // contains only inner rectangles ships as one bg PNG (curves intact),
+        // while the variant's "Label" text node stays a TMP for runtime editing.
         //
-        // Default: true. The package's primary use case is "Figma design lands in
-        // Unity looking exactly like Figma"; designers asked for this explicitly
-        // after structural mode produced visible mismatches on every iteration.
-        public bool FlatRasterizeComponents = true;
+        // Default: true. Designers can disable for fully-structural mode (every
+        // primitive becomes its own UGUI component) if they need maximum runtime
+        // mutability and accept the compositing drift.
+        public bool RasterizeAtomicVisualGroups = true;
 
         // Phase 2 (opt-in): structural duplicate detection — promote subtrees that
         // repeat 2+ times in a frame even when the designer didn't mark them as

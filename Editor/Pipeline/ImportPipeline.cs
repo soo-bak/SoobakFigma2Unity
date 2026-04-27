@@ -487,14 +487,14 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                         && mode == ImportContext.RasterBoundsMode.RenderBounds)
                         continue;
 
-                    // Flat-rasterized COMPONENTs are whole-frame renders — buttons with text,
-                    // icons, internal layout, the lot. 9-slicing them would stretch their
-                    // interior contents (text mid-line, icon centre) when the consumer
-                    // resizes the prefab. The corner radii on the bg are sliceable in
-                    // theory, but doing it here without separating bg from contents will
-                    // do more harm than good. Force Image.Type.Simple by leaving
-                    // spriteBorder at zero.
-                    if (node.NodeType == FigmaNodeType.COMPONENT)
+                    // Atomic visual groups bake their entire subtree into one PNG; if the
+                    // group contains multiple inner shapes (Rectangle 1465 + 1466 + a vector
+                    // accent + ...), 9-slicing the bake would stretch every interior pixel
+                    // proportionally and warp the inner layout. The outer corner radius is
+                    // sliceable in theory but separating bg curve from baked interior here
+                    // would require re-rendering, which defeats the point. Force
+                    // Image.Type.Simple by leaving spriteBorder at zero.
+                    if (IsAtomicVisualGroup(node))
                         continue;
 
                     var borders = nineSlice.DetectBorders(node);
@@ -518,16 +518,22 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         {
             if (NodeConverterRegistry.ShouldSkip(node)) return;
 
-            // Flat mode: every COMPONENT exports as one PNG of the whole frame, then becomes
-            // a single-Image prefab. Bypasses the container-with-children rasterization guard
-            // for COMPONENTs only — bypassing FRAME / GROUP / INSTANCE here would smear the
-            // entire screen back into one image, which is exactly what we fixed last week.
-            // INSTANCEs of these components inherit the flat prefab via PrefabInstanceLinker.
-            bool flatRaster = ctx.Profile != null
-                && ctx.Profile.FlatRasterizeComponents
-                && node.NodeType == FigmaNodeType.COMPONENT;
+            // Atomic-visual-group rasterisation: a FRAME / GROUP / INSTANCE whose
+            // entire descendant tree is purely decorative (no TEXT nodes, no nested
+            // INSTANCEs — only rectangles, vectors, ellipses, etc.) ships as one PNG
+            // for that whole subtree. Folding decorative groups eliminates the
+            // per-rectangle UGUI compositing drift while keeping any text or nested
+            // instance further up the tree as their own editable Unity components.
+            //
+            // Bypasses the container-with-children rasterisation guard for these
+            // groups specifically. The guard still fires for containers that DO
+            // have text or nested instances inside, so the screen frame doesn't
+            // smear back into one image.
+            bool atomicVisualGroup = ctx.Profile != null
+                && ctx.Profile.RasterizeAtomicVisualGroups
+                && IsAtomicVisualGroup(node);
 
-            bool needsRaster = flatRaster || NodeConverterRegistry.NeedsRasterization(node);
+            bool needsRaster = atomicVisualGroup || NodeConverterRegistry.NeedsRasterization(node);
             if (needsRaster)
             {
                 ctx.NodesToRasterize.Add(node.Id);
@@ -543,6 +549,11 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                         ctx.ImageFillRefs.Add(fill.ImageRef);
             }
 
+            // Atomic visual group: the whole subtree is folded into the parent's PNG, so we
+            // shouldn't queue its descendants for individual rasterisation. Stop walking
+            // here — the Figma export at this node level captures everything inside.
+            if (atomicVisualGroup) return;
+
             if (node.Children != null)
                 foreach (var child in node.Children)
                     CollectImageRequirements(child, ctx);
@@ -553,6 +564,41 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             !n.HasVisibleFills &&
             (n.Effects == null || n.Effects.Count == 0) &&
             !NodeConverterRegistry.IsMaskContainer(n); // preserve mask containers
+
+        // An "atomic visual group" is a container whose entire descendant tree is purely
+        // decorative — only RECTANGLE / VECTOR / ELLIPSE / STAR / LINE / REGULAR_POLYGON /
+        // BOOLEAN_OPERATION primitives. No TEXT (we want text editable), no nested INSTANCE
+        // (we want its prefab linkage preserved). Such groups can ship as one PNG without
+        // sacrificing anything the user wants to edit, and the single PNG sidesteps the
+        // per-rectangle UGUI compositing drift that produces "wavy → straight" / clipped-
+        // stroke artefacts.
+        //
+        // The node itself must be a container that can hold children (FRAME / GROUP /
+        // INSTANCE). COMPONENT is excluded — designer-authored components mean structural
+        // intent that we want to honour by keeping the inner layout walkable.
+        private static bool IsAtomicVisualGroup(FigmaNode node)
+        {
+            if (node == null || !node.HasChildren) return false;
+            var t = node.NodeType;
+            if (t != FigmaNodeType.FRAME && t != FigmaNodeType.GROUP && t != FigmaNodeType.INSTANCE)
+                return false;
+            foreach (var child in node.Children)
+                if (HasTextOrInstanceDescendant(child))
+                    return false;
+            return true;
+        }
+
+        private static bool HasTextOrInstanceDescendant(FigmaNode node)
+        {
+            if (node == null) return false;
+            var t = node.NodeType;
+            if (t == FigmaNodeType.TEXT) return true;
+            if (t == FigmaNodeType.INSTANCE) return true;
+            if (node.Children != null)
+                foreach (var child in node.Children)
+                    if (HasTextOrInstanceDescendant(child)) return true;
+            return false;
+        }
 
         // Decides whether Figma should rasterize this node at its absoluteBoundingBox or
         // at its actual render area. The default — AbsoluteBounds — keeps sprite size

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using SoobakFigma2Unity.Editor.Models;
+using SoobakFigma2Unity.Editor.Pipeline;
 using SoobakFigma2Unity.Editor.Util;
 using UnityEditor;
 using UnityEngine;
@@ -32,6 +33,7 @@ namespace SoobakFigma2Unity.Editor.Assets
             FigmaNode container,
             IReadOnlyList<FigmaNode> decorativeLeaves,
             IReadOnlyDictionary<string, string> downloadedPngPaths,
+            IReadOnlyDictionary<string, ImportContext.RasterBoundsMode> rasterBoundsModes,
             float scale,
             string outputDir,
             ImportLogger logger)
@@ -53,7 +55,8 @@ namespace SoobakFigma2Unity.Editor.Assets
                 if (!downloadedPngPaths.TryGetValue(leaf.Id, out var leafPath)) continue;
                 if (string.IsNullOrEmpty(leafPath) || !File.Exists(leafPath)) continue;
 
-                if (BlitLeaf(leaf, container, leafPath, canvasPixels, width, height, scale))
+                rasterBoundsModes?.TryGetValue(leaf.Id, out var boundsMode);
+                if (BlitLeaf(leaf, container, leafPath, boundsMode, canvasPixels, width, height, scale))
                     blittedCount++;
             }
 
@@ -87,6 +90,7 @@ namespace SoobakFigma2Unity.Editor.Assets
         // Y-up after ImageConversion's automatic flip — the offset math handles both ends.
         private static bool BlitLeaf(
             FigmaNode leaf, FigmaNode container, string leafPath,
+            ImportContext.RasterBoundsMode boundsMode,
             Color32[] canvas, int canvasWidth, int canvasHeight, float scale)
         {
             byte[] bytes;
@@ -106,9 +110,14 @@ namespace SoobakFigma2Unity.Editor.Assets
 
                 var leafPixels = leafTex.GetPixels32();
 
-                // Leaf's top-left in container's local Figma coords.
-                float dxFigma = leaf.AbsoluteBoundingBox.X - container.AbsoluteBoundingBox.X;
-                float dyFigma = leaf.AbsoluteBoundingBox.Y - container.AbsoluteBoundingBox.Y;
+                var placementBounds = GetPlacementBounds(leaf, boundsMode);
+                if (placementBounds == null) return false;
+
+                // Leaf PNG's top-left in container-local Figma coords. AbsoluteBounds
+                // exports match absoluteBoundingBox; RenderBounds exports include stroke /
+                // effect bleed and must be placed by absoluteRenderBounds or they drift.
+                float dxFigma = placementBounds.X - container.AbsoluteBoundingBox.X;
+                float dyFigma = placementBounds.Y - container.AbsoluteBoundingBox.Y;
 
                 // Convert to canvas pixel offset. Figma Y-down → texture row-from-bottom:
                 //   canvasYFromBottom_of_leaf_top = canvasHeight - dyFigma*scale - leafH
@@ -162,6 +171,19 @@ namespace SoobakFigma2Unity.Editor.Assets
             {
                 if (leafTex != null) Object.DestroyImmediate(leafTex);
             }
+        }
+
+        private static FigmaRectangle GetPlacementBounds(
+            FigmaNode leaf,
+            ImportContext.RasterBoundsMode boundsMode)
+        {
+            if (boundsMode == ImportContext.RasterBoundsMode.RenderBounds &&
+                leaf.AbsoluteRenderBounds != null &&
+                leaf.AbsoluteRenderBounds.Width > 0f &&
+                leaf.AbsoluteRenderBounds.Height > 0f)
+                return leaf.AbsoluteRenderBounds;
+
+            return leaf.AbsoluteBoundingBox;
         }
 
         private static string SanitiseId(string id)

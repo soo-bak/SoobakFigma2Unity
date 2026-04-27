@@ -124,7 +124,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                         if (leaves.Count == 0) continue;
 
                         var compositePath = CompositeBuilder.Compose(
-                            container, leaves, ctx.NodeImagePaths,
+                            container, leaves, ctx.NodeImagePaths, ctx.NodeRasterBoundsModes,
                             profile.ImageScale, GetTempImageDir(), _logger);
                         if (!string.IsNullOrEmpty(compositePath))
                         {
@@ -495,48 +495,84 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             return go;
         }
 
-        // Creates a TextMeshProUGUI overlay for every TEXT descendant of a composite
-        // container. Each TMP is parented directly under the container's GO and positioned
-        // by Figma coords relative to the container — intermediate frames in the Figma
-        // hierarchy are flattened away because their decorative content is already baked
-        // into the composite below. The standard TextConverter handles font / colour /
-        // alignment.
+        // Creates editable TextMeshProUGUI overlays for TEXT descendants of a composite
+        // container. Keep the transparent wrapper hierarchy on the text path instead of
+        // flattening TEXT directly under the composite root: INSTANCE descendants often
+        // report child bboxes in source-component space, and parent-relative placement is
+        // the only stable way to preserve the final Figma position.
         private void AddTextOverlays(FigmaNode container, GameObject containerGo, ImportContext ctx, ImportProfile profile)
         {
-            var textNodes = new List<FigmaNode>();
-            CollectTextDescendants(container, textNodes);
-            if (textNodes.Count == 0) return;
+            if (container.Children == null) return;
+            foreach (var child in container.Children)
+                AddTextOverlayNode(child, container, containerGo, ctx, profile);
+        }
 
-            var textConverter = _registry.GetConverter(textNodes[0]);
-            if (textConverter == null) return;
+        private void AddTextOverlayNode(
+            FigmaNode node,
+            FigmaNode parentNode,
+            GameObject parentGo,
+            ImportContext ctx,
+            ImportProfile profile)
+        {
+            if (node == null || NodeConverterRegistry.ShouldSkip(node)) return;
+            if (!HasTextDescendantInternal(node)) return;
 
-            foreach (var textNode in textNodes)
+            GameObject go;
+            if (node.NodeType == FigmaNodeType.TEXT)
             {
-                if (NodeConverterRegistry.ShouldSkip(textNode)) continue;
-                GameObject textGo;
-                try { textGo = textConverter.Convert(textNode, containerGo, ctx); }
+                var textConverter = _registry.GetConverter(node);
+                if (textConverter == null) return;
+                try { go = textConverter.Convert(node, parentGo, ctx); }
                 catch (System.Exception e)
                 {
-                    ctx.Logger.Error($"Composite text overlay convert failed for '{textNode.Name}': {e.Message}");
-                    continue;
+                    ctx.Logger.Error($"Composite text overlay convert failed for '{node.Name}': {e.Message}");
+                    return;
                 }
-                if (textGo == null) continue;
-
-                var rt = textGo.GetComponent<RectTransform>();
-                if (rt == null) continue;
-
-                // Position the TMP relative to the container, top-left anchored. Avoids
-                // the SCALE-anchor pitfall that produced wrong-quadrant text drift in the
-                // structural mode — for a baked composite the container size is fixed,
-                // so a fixed-pixel position is the right model anyway.
-                var relPos = SizeCalculator.GetRelativePosition(textNode, container);
-                var textSize = SizeCalculator.GetSize(textNode);
-                rt.pivot = new Vector2(0.5f, 0.5f);
-                rt.anchorMin = new Vector2(0f, 1f);
-                rt.anchorMax = new Vector2(0f, 1f);
-                rt.offsetMin = new Vector2(relPos.x, -(relPos.y + textSize.y));
-                rt.offsetMax = new Vector2(relPos.x + textSize.x, -relPos.y);
             }
+            else
+            {
+                go = new GameObject(node.Name);
+                go.AddComponent<RectTransform>();
+                go.transform.SetParent(parentGo.transform, false);
+                ctx.NodeIdentities[go.transform] = new ImportContext.NodeIdentityRecord(node.Id, node.ComponentId);
+            }
+
+            if (go == null) return;
+            var rt = go.GetComponent<RectTransform>();
+            if (rt != null)
+                ApplyOverlayLayout(rt, go, node, parentNode, profile);
+
+            if (node.NodeType != FigmaNodeType.TEXT)
+            {
+                if (profile.ConvertAutoLayout && node.IsAutoLayout)
+                    AutoLayoutMapper.Apply(go, node);
+                if (node.Children != null)
+                    foreach (var child in node.Children)
+                        AddTextOverlayNode(child, node, go, ctx, profile);
+            }
+        }
+
+        private static void ApplyOverlayLayout(
+            RectTransform rt,
+            GameObject go,
+            FigmaNode node,
+            FigmaNode parentNode,
+            ImportProfile profile)
+        {
+            if (parentNode.IsAutoLayout && !node.IsAbsolutePositioned)
+            {
+                if (profile.ConvertAutoLayout)
+                    AutoLayoutMapper.ApplyChildLayoutProperties(go, node, parentNode);
+                return;
+            }
+
+            var relPos = SizeCalculator.GetRelativePosition(node, parentNode);
+            var size = SizeCalculator.GetSize(node);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.anchorMin = new Vector2(0f, 1f);
+            rt.anchorMax = new Vector2(0f, 1f);
+            rt.offsetMin = new Vector2(relPos.x, -(relPos.y + size.y));
+            rt.offsetMax = new Vector2(relPos.x + size.x, -relPos.y);
         }
 
         // ─── Image import ───────────────────────────────
@@ -573,6 +609,9 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 ctx.NodeSprites[kv.Key] = s;
                 if (nineSlice != null && ctx.NodeIndex.TryGetValue(kv.Key, out var node))
                 {
+                    if (ctx.CompositeContainerIds.Contains(kv.Key))
+                        continue;
+
                     // 9-slice border math is in pixels of the EXPORTED sprite, derived from
                     // node dimensions × scale. That equation only holds when the sprite size
                     // equals the bounding box — i.e. AbsoluteBounds export. RenderBounds

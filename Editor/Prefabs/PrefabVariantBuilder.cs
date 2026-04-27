@@ -121,21 +121,30 @@ namespace SoobakFigma2Unity.Editor.Prefabs
 
         /// <summary>
         /// Apply visual differences from source (variant) onto target (base prefab instance).
-        /// Matches children by name and applies Image color/sprite and Text changes.
+        /// Recursive name-based matching with three structural cases:
+        ///   • Both have the named child  → recurse, copy property overrides
+        ///   • Variant has it, base doesn't → instantiate the source subtree under target
+        ///   • Base has it, variant doesn't → SetActive(false) on the base child so the
+        ///                                    layout doesn't show a leftover ghost from base
         /// </summary>
         private void ApplyOverrides(GameObject target, GameObject source)
         {
-            // Apply root-level overrides
             ApplyComponentOverrides(target, source);
 
-            // Match children by name and apply recursively
             var targetChildren = new Dictionary<string, Transform>();
             for (int i = 0; i < target.transform.childCount; i++)
             {
-                var child = target.transform.GetChild(i);
-                targetChildren[child.name] = child;
+                var c = target.transform.GetChild(i);
+                targetChildren[c.name] = c;
+            }
+            var sourceChildren = new Dictionary<string, Transform>();
+            for (int i = 0; i < source.transform.childCount; i++)
+            {
+                var c = source.transform.GetChild(i);
+                sourceChildren[c.name] = c;
             }
 
+            // Variant children: recurse into matched, clone in unmatched.
             for (int i = 0; i < source.transform.childCount; i++)
             {
                 var sourceChild = source.transform.GetChild(i);
@@ -143,53 +152,97 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 {
                     ApplyOverrides(targetChild.gameObject, sourceChild.gameObject);
                 }
+                else
+                {
+                    // Variant has a child that the base prefab doesn't. Clone the source
+                    // subtree under target — Unity's Prefab Variant system records added
+                    // GameObjects as variant-local additions, so they show up only on
+                    // this variant prefab and don't leak back to base.
+                    var added = UnityEngine.Object.Instantiate(sourceChild.gameObject, target.transform);
+                    added.name = sourceChild.name;
+                }
+            }
+
+            // Base-only children: hide them. Unity Prefab Variants can't remove an
+            // inherited GameObject — disabling is the closest non-destructive equivalent
+            // and keeps SmartMerge round-tripping safe (a future re-import that re-adds
+            // the variant child can flip SetActive back on).
+            foreach (var pair in targetChildren)
+            {
+                if (sourceChildren.ContainsKey(pair.Key)) continue;
+                var go = pair.Value.gameObject;
+                if (go.activeSelf) go.SetActive(false);
             }
         }
 
         private void ApplyComponentOverrides(GameObject target, GameObject source)
         {
-            // Image overrides
-            var targetImage = target.GetComponent<Image>();
-            var sourceImage = source.GetComponent<Image>();
-            if (targetImage != null && sourceImage != null)
-            {
-                if (targetImage.color != sourceImage.color)
-                    targetImage.color = sourceImage.color;
-                if (targetImage.sprite != sourceImage.sprite)
-                    targetImage.sprite = sourceImage.sprite;
-            }
-
-            // TMP Text overrides
-            var targetText = target.GetComponent<TMPro.TextMeshProUGUI>();
-            var sourceText = source.GetComponent<TMPro.TextMeshProUGUI>();
-            if (targetText != null && sourceText != null)
-            {
-                if (targetText.text != sourceText.text)
-                    targetText.text = sourceText.text;
-                if (targetText.color != sourceText.color)
-                    targetText.color = sourceText.color;
-                if (!Mathf.Approximately(targetText.fontSize, sourceText.fontSize))
-                    targetText.fontSize = sourceText.fontSize;
-            }
-
-            // RectTransform size overrides
+            // RectTransform — full sync. The previous version only copied sizeDelta,
+            // which left every variant inheriting the base's anchors/pivot/position
+            // and produced visually wrong results for variants that moved or re-anchored
+            // their children (which is most of them in real design systems).
             var targetRt = target.GetComponent<RectTransform>();
             var sourceRt = source.GetComponent<RectTransform>();
             if (targetRt != null && sourceRt != null)
             {
-                if (targetRt.sizeDelta != sourceRt.sizeDelta)
-                    targetRt.sizeDelta = sourceRt.sizeDelta;
+                if (targetRt.anchorMin       != sourceRt.anchorMin)       targetRt.anchorMin       = sourceRt.anchorMin;
+                if (targetRt.anchorMax       != sourceRt.anchorMax)       targetRt.anchorMax       = sourceRt.anchorMax;
+                if (targetRt.pivot           != sourceRt.pivot)           targetRt.pivot           = sourceRt.pivot;
+                if (targetRt.sizeDelta       != sourceRt.sizeDelta)       targetRt.sizeDelta       = sourceRt.sizeDelta;
+                if (targetRt.anchoredPosition != sourceRt.anchoredPosition) targetRt.anchoredPosition = sourceRt.anchoredPosition;
+                if (targetRt.localRotation   != sourceRt.localRotation)   targetRt.localRotation   = sourceRt.localRotation;
+                if (targetRt.localScale      != sourceRt.localScale)      targetRt.localScale      = sourceRt.localScale;
             }
 
-            // CanvasGroup (opacity) overrides
+            // Image — sprite, color, plus type/preserveAspect/fillCenter so 9-slice
+            // and aspect-locked variants don't degenerate into stretched simple sprites.
+            var targetImage = target.GetComponent<Image>();
+            var sourceImage = source.GetComponent<Image>();
+            if (targetImage != null && sourceImage != null)
+            {
+                if (targetImage.color           != sourceImage.color)           targetImage.color           = sourceImage.color;
+                if (targetImage.sprite          != sourceImage.sprite)          targetImage.sprite          = sourceImage.sprite;
+                if (targetImage.type            != sourceImage.type)            targetImage.type            = sourceImage.type;
+                if (targetImage.preserveAspect  != sourceImage.preserveAspect)  targetImage.preserveAspect  = sourceImage.preserveAspect;
+                if (targetImage.fillCenter      != sourceImage.fillCenter)      targetImage.fillCenter      = sourceImage.fillCenter;
+            }
+
+            // TextMeshProUGUI — text, color, fontSize, alignment, font asset.
+            var targetText = target.GetComponent<TMPro.TextMeshProUGUI>();
+            var sourceText = source.GetComponent<TMPro.TextMeshProUGUI>();
+            if (targetText != null && sourceText != null)
+            {
+                if (targetText.text      != sourceText.text)               targetText.text      = sourceText.text;
+                if (targetText.color     != sourceText.color)              targetText.color     = sourceText.color;
+                if (!Mathf.Approximately(targetText.fontSize, sourceText.fontSize)) targetText.fontSize = sourceText.fontSize;
+                if (targetText.alignment != sourceText.alignment)          targetText.alignment = sourceText.alignment;
+                if (targetText.font      != sourceText.font && sourceText.font != null) targetText.font = sourceText.font;
+                if (targetText.fontStyle != sourceText.fontStyle)          targetText.fontStyle = sourceText.fontStyle;
+            }
+
+            // CanvasGroup (opacity).
             var targetCg = target.GetComponent<CanvasGroup>();
             var sourceCg = source.GetComponent<CanvasGroup>();
             if (sourceCg != null)
             {
-                if (targetCg == null)
-                    targetCg = target.AddComponent<CanvasGroup>();
-                if (!Mathf.Approximately(targetCg.alpha, sourceCg.alpha))
-                    targetCg.alpha = sourceCg.alpha;
+                if (targetCg == null) targetCg = target.AddComponent<CanvasGroup>();
+                if (!Mathf.Approximately(targetCg.alpha, sourceCg.alpha)) targetCg.alpha = sourceCg.alpha;
+            }
+
+            // LayoutElement — preferred / min / flexible sizes drive how the parent
+            // LayoutGroup positions this object, so per-variant layout differences
+            // (a wider button having a wider preferredWidth) need to come through.
+            var targetLe = target.GetComponent<LayoutElement>();
+            var sourceLe = source.GetComponent<LayoutElement>();
+            if (sourceLe != null)
+            {
+                if (targetLe == null) targetLe = target.AddComponent<LayoutElement>();
+                if (!Mathf.Approximately(targetLe.preferredWidth,  sourceLe.preferredWidth))  targetLe.preferredWidth  = sourceLe.preferredWidth;
+                if (!Mathf.Approximately(targetLe.preferredHeight, sourceLe.preferredHeight)) targetLe.preferredHeight = sourceLe.preferredHeight;
+                if (!Mathf.Approximately(targetLe.minWidth,        sourceLe.minWidth))        targetLe.minWidth        = sourceLe.minWidth;
+                if (!Mathf.Approximately(targetLe.minHeight,       sourceLe.minHeight))       targetLe.minHeight       = sourceLe.minHeight;
+                if (!Mathf.Approximately(targetLe.flexibleWidth,   sourceLe.flexibleWidth))   targetLe.flexibleWidth   = sourceLe.flexibleWidth;
+                if (!Mathf.Approximately(targetLe.flexibleHeight,  sourceLe.flexibleHeight))  targetLe.flexibleHeight  = sourceLe.flexibleHeight;
             }
         }
 

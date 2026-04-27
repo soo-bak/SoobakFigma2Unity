@@ -48,11 +48,52 @@ namespace SoobakFigma2Unity.Editor.Layout
                     if (h <= 0f && node.AbsoluteRenderBounds.Height > 0f)
                         h = node.AbsoluteRenderBounds.Height;
                 }
+
+                // TEXT nodes inside a HUG-vertical auto-layout report bbox.height = 0
+                // (and frequently renderBounds.height = 0 too) because Figma defers
+                // height to the runtime layout pass — "the ContentSizeFitter will
+                // figure it out". That works at play time, but in the prefab inspector
+                // the row collapses to zero height and the visual looks broken until
+                // the user touches a layout-rebuild trigger. Estimate from the typed
+                // line height so the prefab opens with a sensible static size.
+                if (node.NodeType == FigmaNodeType.TEXT && h <= 0f && node.Style != null)
+                    h = EstimateTextHeight(node);
+
                 return new Vector2(w, h);
             }
             if (node.Size != null)
                 return new Vector2(node.Size.X, node.Size.Y);
             return Vector2.zero;
+        }
+
+        // Best-effort text height estimate from FigmaTypeStyle. Figma's lineHeight is
+        // either a fixed pixel value, a percent of font size, or unset (defaults to
+        // ~1.2× font size in most fonts). We err slightly tall — better to over-reserve
+        // than collapse the row.
+        private static float EstimateTextHeight(FigmaNode node)
+        {
+            var style = node.Style;
+            float fontSize = style.FontSize > 0f ? style.FontSize : 14f;
+
+            float lineHeight;
+            if (style.LineHeightPx > 0f)
+                lineHeight = style.LineHeightPx;
+            else if (string.Equals(style.LineHeightUnit, "PIXELS", System.StringComparison.OrdinalIgnoreCase) && style.LineHeightPercent > 0f)
+                lineHeight = style.LineHeightPercent;
+            else if (style.LineHeightPercent > 0f)
+                lineHeight = fontSize * style.LineHeightPercent / 100f;
+            else
+                lineHeight = fontSize * 1.2f;
+
+            int lineCount = 1;
+            if (!string.IsNullOrEmpty(node.Characters))
+            {
+                lineCount = 1;
+                for (int i = 0; i < node.Characters.Length; i++)
+                    if (node.Characters[i] == '\n') lineCount++;
+            }
+
+            return lineHeight * lineCount;
         }
 
         /// <summary>

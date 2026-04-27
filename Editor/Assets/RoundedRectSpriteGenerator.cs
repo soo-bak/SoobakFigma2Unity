@@ -57,13 +57,9 @@ namespace SoobakFigma2Unity.Editor.Assets
             {
                 importer.textureType = TextureImporterType.Sprite;
                 importer.spriteImportMode = SpriteImportMode.Single;
-                importer.spriteMeshType = SpriteMeshType.FullRect;
-                importer.npotScale = TextureImporterNPOTScale.None;
                 importer.alphaIsTransparency = true;
                 importer.mipmapEnabled = false;
                 importer.filterMode = FilterMode.Bilinear;
-                importer.wrapMode = TextureWrapMode.Clamp;
-                importer.textureCompression = TextureImporterCompression.Uncompressed;
                 importer.spritePixelsPerUnit = 100f * scale;
                 importer.spriteBorder = new Vector4(radiusPx, radiusPx, radiusPx, radiusPx);
                 importer.SaveAndReimport();

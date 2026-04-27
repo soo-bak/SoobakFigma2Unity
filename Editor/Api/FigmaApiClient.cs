@@ -53,16 +53,13 @@ namespace SoobakFigma2Unity.Editor.Api
 
         public async Task<Dictionary<string, string>> GetImageUrlsAsync(
             string fileKey, IReadOnlyList<string> nodeIds,
-            float scale = 2f,
-            string format = "png",
-            bool useAbsoluteBounds = true,
-            CancellationToken ct = default)
+            float scale = 2f, string format = "png", CancellationToken ct = default)
         {
             var result = new Dictionary<string, string>();
             for (int i = 0; i < nodeIds.Count; i += ImageBatchSize)
             {
                 var batch = nodeIds.Skip(i).Take(ImageBatchSize).ToList();
-                var url = FigmaEndpoints.GetImages(fileKey, batch, scale, format, useAbsoluteBounds);
+                var url = FigmaEndpoints.GetImages(fileKey, batch, scale, format);
                 var json = await GetJsonAsync(url, ct);
                 var response = JsonConvert.DeserializeObject<FigmaImageResponse>(json);
                 if (!string.IsNullOrEmpty(response.Error))

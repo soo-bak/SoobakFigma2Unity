@@ -108,13 +108,13 @@ namespace SoobakFigma2Unity.Editor.Converters
                     return true;
             }
 
-            // Uniform corner radius + visible fills on a visual leaf → rasterize.
+            // Uniform corner radius + visible fills on RECTANGLE → rasterize.
             // Unity Image cannot render rounded corners natively without a sprite asset,
             // so we bake the rounded shape into a PNG. NineSliceDetector then sets sprite
             // borders so the rounded corners scale correctly with RT size.
-            // Keep non-leaf containers structured; rasterizing them would bake their
-            // text/children into the background image and then skip child conversion.
-            if (IsVisualLeaf(node) && node.HasVisibleFills && HasRoundedCorners(node))
+            // (Without this rule, solid-filled rounded rectangles like button backgrounds
+            //  end up with no Image at all because SolidColorOptimizer rejects them.)
+            if (t == FigmaNodeType.RECTANGLE && node.HasVisibleFills && node.CornerRadius > 0)
                 return true;
 
             // Visible stroke (border) → rasterize. Unity Image cannot draw strokes
@@ -158,25 +158,6 @@ namespace SoobakFigma2Unity.Editor.Converters
             // sprite swapping (e.g., speechbubble emoji variants).
 
             return false;
-        }
-
-        private static bool IsVisualLeaf(FigmaNode node)
-        {
-            if (node.NodeType == FigmaNodeType.RECTANGLE)
-                return true;
-            return node.Children == null || node.Children.Count == 0;
-        }
-
-        private static bool HasRoundedCorners(FigmaNode node)
-        {
-            if (node.CornerRadius > 0f)
-                return true;
-            if (node.RectangleCornerRadii == null || node.RectangleCornerRadii.Length != 4)
-                return false;
-            return node.RectangleCornerRadii[0] > 0f ||
-                   node.RectangleCornerRadii[1] > 0f ||
-                   node.RectangleCornerRadii[2] > 0f ||
-                   node.RectangleCornerRadii[3] > 0f;
         }
 
         /// <summary>

@@ -67,27 +67,15 @@ namespace SoobakFigma2Unity.Editor.Assets
                 if (importer.spriteImportMode != SpriteImportMode.Single)
                 { importer.spriteImportMode = SpriteImportMode.Single; needsChange = true; }
 
-                if (importer.spriteMeshType != SpriteMeshType.FullRect)
-                { importer.spriteMeshType = SpriteMeshType.FullRect; needsChange = true; }
-
                 float targetPPU = 100f * scale;
                 if (!Mathf.Approximately(importer.spritePixelsPerUnit, targetPPU))
                 { importer.spritePixelsPerUnit = targetPPU; needsChange = true; }
-
-                if (importer.npotScale != TextureImporterNPOTScale.None)
-                { importer.npotScale = TextureImporterNPOTScale.None; needsChange = true; }
 
                 if (importer.mipmapEnabled)
                 { importer.mipmapEnabled = false; needsChange = true; }
 
                 if (importer.filterMode != FilterMode.Bilinear)
                 { importer.filterMode = FilterMode.Bilinear; needsChange = true; }
-
-                if (importer.wrapMode != TextureWrapMode.Clamp)
-                { importer.wrapMode = TextureWrapMode.Clamp; needsChange = true; }
-
-                if (importer.maxTextureSize < 8192)
-                { importer.maxTextureSize = 8192; needsChange = true; }
 
                 if (!importer.alphaIsTransparency)
                 { importer.alphaIsTransparency = true; needsChange = true; }

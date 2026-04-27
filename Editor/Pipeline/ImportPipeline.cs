@@ -602,44 +602,35 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
         // Decides whether Figma should rasterize this node at its absoluteBoundingBox or
         // at its actual render area. The default — AbsoluteBounds — keeps sprite size
-        // matching the RectTransform exactly. RenderBounds is the escape hatch for nodes
-        // whose visible footprint *extends* past the layout box (outside stroke, drop
-        // shadow, outer glow, layer blur).
-        //
-        // Stroke type and effect presence are necessary signals but not sufficient: a node
-        // can have a stroke OUTSIDE that's hidden, an effect with zero spread, or a node
-        // with soft alpha gradient that Figma INTERNALLY renders smaller than the bounding
-        // box. In any of those, RenderBounds would *shrink* the export to just the visible
-        // content with transparent padding stripped, and that smaller sprite then stretches
-        // up to fill the bounding-box-sized RectTransform — losing fidelity AND positional
-        // accuracy because the visible content's offset within the bbox doesn't survive
-        // the strip+stretch round-trip. (Observed on `highlight` inside KeyHint: a soft
-        // 4-px-visible crescent inside an 8-px bbox shipped as an 8-px PNG that then
-        // stretched into the 8-unit RectTransform, displaying as a low-res blob in the
-        // wrong place rather than the crisp upper-left reflection Figma showed.)
-        //
-        // The reliable rule: only switch to RenderBounds when renderBounds is GENUINELY
-        // larger than boundingBox. The stroke/effect heuristics stay as a gate, but the
-        // actual dimension comparison is the deciding factor.
+        // matching the RectTransform exactly, which is what we want for the typical node.
+        // The escape hatch fires when the node's visible footprint extends past the layout
+        // box: an outside / center stroke, or a drop shadow / outer-glow effect that would
+        // otherwise get clipped flush to the path.
         private static ImportContext.RasterBoundsMode ChooseRasterBoundsMode(FigmaNode node)
         {
             if (node == null) return ImportContext.RasterBoundsMode.AbsoluteBounds;
-            if (node.AbsoluteBoundingBox == null || node.AbsoluteRenderBounds == null)
-                return ImportContext.RasterBoundsMode.AbsoluteBounds;
 
-            const float epsilon = 0.5f;
-            float bw = node.AbsoluteBoundingBox.Width;
-            float bh = node.AbsoluteBoundingBox.Height;
-            float rw = node.AbsoluteRenderBounds.Width;
-            float rh = node.AbsoluteRenderBounds.Height;
+            // Stroke that paints outside the path. Figma's default is INSIDE; OUTSIDE and
+            // CENTER both bleed past the bounding box and get clipped at use_absolute_bounds=true.
+            bool hasOutsideStroke = node.StrokeWeight > 0f
+                && node.Strokes != null
+                && node.Strokes.Exists(s => s.Visible && s.Opacity > 0f)
+                && (node.StrokeAlign == "OUTSIDE" || node.StrokeAlign == "CENTER");
 
-            // RenderBounds only when the visible area actually extends past the layout
-            // box (stroke OUTSIDE / shadow / glow / blur). Equal or smaller render bounds
-            // mean the bounding box already contains everything we need to ship.
-            bool extendsHorizontally = rw > bw + epsilon;
-            bool extendsVertically   = rh > bh + epsilon;
+            // Drop shadow / outer glow / layer blur expand the rendered area beyond the path.
+            // Inner shadow / inner glow stay inside, so we don't trip on those.
+            bool hasOutwardEffect = false;
+            if (node.Effects != null)
+            {
+                foreach (var fx in node.Effects)
+                {
+                    if (fx == null || !fx.Visible) continue;
+                    if (fx.Type == "DROP_SHADOW" || fx.Type == "LAYER_BLUR")
+                    { hasOutwardEffect = true; break; }
+                }
+            }
 
-            return (extendsHorizontally || extendsVertically)
+            return hasOutsideStroke || hasOutwardEffect
                 ? ImportContext.RasterBoundsMode.RenderBounds
                 : ImportContext.RasterBoundsMode.AbsoluteBounds;
         }

@@ -75,6 +75,32 @@ namespace SoobakFigma2Unity.Editor.Settings
         public string ComponentOutputPath = "Assets/UI/Components";
         public bool ExtractFigmaComponentsAsPrefabs = true;
 
+        // FLAT rasterisation per-COMPONENT.
+        //
+        // When true, every Figma COMPONENT in the import tree is exported as a
+        // single PNG of the *whole* component (everything inside baked together —
+        // background, strokes, inner rectangles, text, the works) and the resulting
+        // Unity prefab is just one GameObject with one Image. No recursive walk of
+        // the COMPONENT's children, no per-rectangle sprites composited by UGUI.
+        //
+        // Why this matters: Figma's compositing (alpha, blend modes, mask
+        // intersections, stroke offsets, drop-shadow under/over rules) does not
+        // match UGUI's. Even when every individual element exports correctly the
+        // assembled visual drifts — wavy lines flatten, strokes clip, layers mis-
+        // overlap. A single PNG sidesteps the entire compositing question because
+        // Figma rendered the final frame itself.
+        //
+        // Trade-off: the prefab loses editability of inner elements (text is baked
+        // pixels, not a TextMeshProUGUI). For static design fidelity this is the
+        // correct trade. For dynamic UI (per-instance text, runtime tinting),
+        // disable this and accept the compositing drift, or design the dynamic
+        // parts as their own Figma components and assemble them in Unity.
+        //
+        // Default: true. The package's primary use case is "Figma design lands in
+        // Unity looking exactly like Figma"; designers asked for this explicitly
+        // after structural mode produced visible mismatches on every iteration.
+        public bool FlatRasterizeComponents = true;
+
         // Phase 2 (opt-in): structural duplicate detection — promote subtrees that
         // repeat 2+ times in a frame even when the designer didn't mark them as
         // Figma components. Off by default because false-positives (visually

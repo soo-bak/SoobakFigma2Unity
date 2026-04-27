@@ -487,6 +487,16 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                         && mode == ImportContext.RasterBoundsMode.RenderBounds)
                         continue;
 
+                    // Flat-rasterized COMPONENTs are whole-frame renders — buttons with text,
+                    // icons, internal layout, the lot. 9-slicing them would stretch their
+                    // interior contents (text mid-line, icon centre) when the consumer
+                    // resizes the prefab. The corner radii on the bg are sliceable in
+                    // theory, but doing it here without separating bg from contents will
+                    // do more harm than good. Force Image.Type.Simple by leaving
+                    // spriteBorder at zero.
+                    if (node.NodeType == FigmaNodeType.COMPONENT)
+                        continue;
+
                     var borders = nineSlice.DetectBorders(node);
                     if (borders != Vector4.zero)
                     {
@@ -508,7 +518,16 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         {
             if (NodeConverterRegistry.ShouldSkip(node)) return;
 
-            bool needsRaster = NodeConverterRegistry.NeedsRasterization(node);
+            // Flat mode: every COMPONENT exports as one PNG of the whole frame, then becomes
+            // a single-Image prefab. Bypasses the container-with-children rasterization guard
+            // for COMPONENTs only — bypassing FRAME / GROUP / INSTANCE here would smear the
+            // entire screen back into one image, which is exactly what we fixed last week.
+            // INSTANCEs of these components inherit the flat prefab via PrefabInstanceLinker.
+            bool flatRaster = ctx.Profile != null
+                && ctx.Profile.FlatRasterizeComponents
+                && node.NodeType == FigmaNodeType.COMPONENT;
+
+            bool needsRaster = flatRaster || NodeConverterRegistry.NeedsRasterization(node);
             if (needsRaster)
             {
                 ctx.NodesToRasterize.Add(node.Id);

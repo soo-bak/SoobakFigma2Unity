@@ -737,6 +737,15 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             foreach (var child in node.Children)
                 if (HasTextOrInstanceDescendant(child))
                     return false;
+
+            // Atomic export uses the wrapper's absoluteBoundingBox as the canvas. If a
+            // descendant draws past that box (e.g. KeyHint's `highlight` INSTANCE wrapper
+            // is bbox 8×8 but its inner ellipse is 10.04×9.58 — extends ~1px on each side),
+            // Figma silently clips the overflow and the wrapper-sized RT shows the
+            // truncated visual at the wrong size. Walk into the children so each shape
+            // ships at its own bbox and lands at the right place.
+            if (DescendantsExtendPastBounds(node))
+                return false;
             return true;
         }
 
@@ -749,6 +758,37 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (node.Children != null)
                 foreach (var child in node.Children)
                     if (HasTextOrInstanceDescendant(child)) return true;
+            return false;
+        }
+
+        // True when any descendant's bounding box pokes outside the parent's. Subpixel
+        // drift (≤0.5 px) is tolerated so anti-aliased path bounds don't spuriously trip
+        // it. Walks the full subtree because an inner-inner shape (e.g. wrapper > frame >
+        // ellipse) can also overflow.
+        private static bool DescendantsExtendPastBounds(FigmaNode parent)
+        {
+            var pb = parent.AbsoluteBoundingBox;
+            if (pb == null || parent.Children == null) return false;
+            const float eps = 0.5f;
+            foreach (var child in parent.Children)
+                if (DescendantExtendsPast(child, pb, eps)) return true;
+            return false;
+        }
+
+        private static bool DescendantExtendsPast(FigmaNode node, FigmaRectangle parentBounds, float eps)
+        {
+            if (node == null) return false;
+            var b = node.AbsoluteBoundingBox;
+            if (b != null)
+            {
+                if (b.X < parentBounds.X - eps) return true;
+                if (b.Y < parentBounds.Y - eps) return true;
+                if (b.X + b.Width > parentBounds.X + parentBounds.Width + eps) return true;
+                if (b.Y + b.Height > parentBounds.Y + parentBounds.Height + eps) return true;
+            }
+            if (node.Children != null)
+                foreach (var child in node.Children)
+                    if (DescendantExtendsPast(child, parentBounds, eps)) return true;
             return false;
         }
 
@@ -846,6 +886,17 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (t == FigmaNodeType.INSTANCE)
             {
                 if (HasTextDescendantInternal(node))
+                {
+                    if (node.Children != null)
+                        foreach (var c in node.Children)
+                            CollectDecorativeLeaves(c, output);
+                    return;
+                }
+                // INSTANCE wrapper whose inner content reaches past its own bbox: baking
+                // the wrapper as a single leaf would clip the overflow (Figma's PNG export
+                // canvases at the wrapper's bbox). Walk in instead so each inner primitive
+                // ships at its own bbox and the composite gets the full visual.
+                if (DescendantsExtendPastBounds(node))
                 {
                     if (node.Children != null)
                         foreach (var c in node.Children)

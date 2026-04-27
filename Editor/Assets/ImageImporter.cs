@@ -75,59 +75,64 @@ namespace SoobakFigma2Unity.Editor.Assets
                 AssetDatabase.StopAssetEditing();
             }
 
-            // Second pass: configure all importers
+            // Second pass: configure all importers. Every per-sprite setting goes through
+            // TextureImporterSettings so SetTextureSettings is called exactly once per
+            // importer at the end — interleaving direct property writes with a later
+            // ReadTextureSettings/SetTextureSettings round-trip silently dropped the
+            // spriteMeshType change in earlier versions (the struct round-trip clobbered
+            // fields the direct setters had touched).
+            float targetPPU = 100f * scale;
             var pathsToReimport = new List<string>();
             foreach (var assetPath in assetPaths)
             {
                 var importer = AssetImporter.GetAtPath(assetPath) as TextureImporter;
                 if (importer == null) continue;
 
+                var settings = new TextureImporterSettings();
+                importer.ReadTextureSettings(settings);
+
                 bool needsChange = false;
 
-                if (importer.textureType != TextureImporterType.Sprite)
-                { importer.textureType = TextureImporterType.Sprite; needsChange = true; }
+                if (settings.textureType != TextureImporterType.Sprite)
+                { settings.textureType = TextureImporterType.Sprite; needsChange = true; }
 
-                if (importer.spriteImportMode != SpriteImportMode.Single)
-                { importer.spriteImportMode = SpriteImportMode.Single; needsChange = true; }
+                if (settings.spriteMode != (int)SpriteImportMode.Single)
+                { settings.spriteMode = (int)SpriteImportMode.Single; needsChange = true; }
 
-                float targetPPU = 100f * scale;
-                if (!Mathf.Approximately(importer.spritePixelsPerUnit, targetPPU))
-                { importer.spritePixelsPerUnit = targetPPU; needsChange = true; }
+                if (!Mathf.Approximately(settings.spritePixelsPerUnit, targetPPU))
+                { settings.spritePixelsPerUnit = targetPPU; needsChange = true; }
 
-                if (importer.mipmapEnabled)
-                { importer.mipmapEnabled = false; needsChange = true; }
+                if (settings.mipmapEnabled)
+                { settings.mipmapEnabled = false; needsChange = true; }
 
-                if (importer.filterMode != FilterMode.Bilinear)
-                { importer.filterMode = FilterMode.Bilinear; needsChange = true; }
+                if (settings.filterMode != FilterMode.Bilinear)
+                { settings.filterMode = FilterMode.Bilinear; needsChange = true; }
 
-                if (!importer.alphaIsTransparency)
-                { importer.alphaIsTransparency = true; needsChange = true; }
+                if (!settings.alphaIsTransparency)
+                { settings.alphaIsTransparency = true; needsChange = true; }
 
-                if (importer.isReadable)
-                { importer.isReadable = false; needsChange = true; }
+                if (settings.readable)
+                { settings.readable = false; needsChange = true; }
 
                 // FullRect mesh keeps the sprite quad covering every pixel — including the
-                // transparent ones around drop shadows, glows, or padded borders. The default
-                // (Tight) generates a polygon hugging the visible alpha, which:
+                // transparent ones around drop shadows, glows, or padded borders. Tight
+                // (the Unity default) generates a polygon hugging the visible alpha which:
                 //   • Crops the corners of 9-sliced sprites so border regions render wrong
                 //   • Cuts off shadows that bleed past the layout bounding box
                 //   • Misaligns visuals against the RectTransform whenever there's
-                //     transparent margin (almost every Figma export)
-                // Match the size we got from use_absolute_bounds=true — anything tighter is
-                // a fight with the sprite quad we paid for.
-                var settings = new TextureImporterSettings();
-                importer.ReadTextureSettings(settings);
+                //     transparent margin — i.e. almost every Figma export, especially the
+                //     ones that just landed via use_absolute_bounds=true
                 if (settings.spriteMeshType != SpriteMeshType.FullRect)
-                {
-                    settings.spriteMeshType = SpriteMeshType.FullRect;
-                    importer.SetTextureSettings(settings);
-                    needsChange = true;
-                }
+                { settings.spriteMeshType = SpriteMeshType.FullRect; needsChange = true; }
 
-                // Uncompressed by default: DXT/BC compression chews alpha gradients and
-                // turns clean Figma edges into ringed artifacts. UI sprites are usually
-                // small enough that the memory cost is negligible compared to the visual
-                // regression compressed formats introduce.
+                if (needsChange)
+                    importer.SetTextureSettings(settings);
+
+                // Uncompressed by default: DXT / BC compression chews alpha gradients and
+                // turns clean Figma edges into ringed artifacts. textureCompression lives
+                // outside TextureImporterSettings (it's part of TextureImporterPlatformSettings
+                // for the default platform), so it stays as a direct property write — but
+                // the SetTextureSettings call above is already done so this can't clobber it.
                 if (importer.textureCompression != TextureImporterCompression.Uncompressed)
                 {
                     importer.textureCompression = TextureImporterCompression.Uncompressed;

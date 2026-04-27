@@ -21,11 +21,17 @@ namespace SoobakFigma2Unity.Editor.Api
             return $"{BaseUrl}/files/{fileKey}/nodes?ids={System.Uri.EscapeDataString(ids)}";
         }
 
-        public static string GetImages(string fileKey, IEnumerable<string> nodeIds, float scale = 2f, string format = "png")
+        public static string GetImages(
+            string fileKey,
+            IEnumerable<string> nodeIds,
+            float scale = 2f,
+            string format = "png",
+            bool useAbsoluteBounds = true)
         {
             var ids = string.Join(",", nodeIds);
             var scaleText = scale.ToString(CultureInfo.InvariantCulture);
-            return $"{BaseUrl}/images/{fileKey}?ids={System.Uri.EscapeDataString(ids)}&scale={scaleText}&format={format}&use_absolute_bounds=true";
+            var boundsText = useAbsoluteBounds ? "true" : "false";
+            return $"{BaseUrl}/images/{fileKey}?ids={System.Uri.EscapeDataString(ids)}&scale={scaleText}&format={format}&use_absolute_bounds={boundsText}";
         }
 
         public static string GetImageFills(string fileKey)

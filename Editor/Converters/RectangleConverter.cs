@@ -61,17 +61,14 @@ namespace SoobakFigma2Unity.Editor.Converters
             // Only add Image when there is actual content to render
             if (chosenSprite != null || chosenColor != null)
             {
-                var image = go.AddComponent<Image>();
+                Image image;
                 if (chosenSprite != null)
                 {
-                    image.sprite = chosenSprite;
-                    image.type = (chosenSprite.border != UnityEngine.Vector4.zero)
-                        ? Image.Type.Sliced
-                        : Image.Type.Simple;
-                    image.color = UnityEngine.Color.white;
+                    image = RasterImageRenderer.Apply(go, node, ctx, chosenSprite, forceSameObject: node.IsMask);
                 }
                 else
                 {
+                    image = go.AddComponent<Image>();
                     image.color = chosenColor.Value;
                     if (node.CornerRadius > 0)
                     {

@@ -6,6 +6,12 @@ using UnityEngine;
 
 namespace SoobakFigma2Unity.Editor.Pipeline
 {
+    internal enum RasterBoundsMode
+    {
+        AbsoluteBounds,
+        RenderBounds
+    }
+
     /// <summary>
     /// Shared state for a single import operation.
     /// Passed to all converters so they can access images, settings, etc.
@@ -26,6 +32,9 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
         /// <summary>Mapping of Figma node ID -> imported Unity Sprite.</summary>
         public Dictionary<string, Sprite> NodeSprites { get; set; } = new Dictionary<string, Sprite>();
+
+        /// <summary>Mapping of Figma node ID -> bounds mode used for its rasterized sprite.</summary>
+        public Dictionary<string, RasterBoundsMode> NodeRasterBoundsModes { get; set; } = new Dictionary<string, RasterBoundsMode>();
 
         /// <summary>Mapping of imageRef -> imported Unity Sprite.</summary>
         public Dictionary<string, Sprite> FillSprites { get; set; } = new Dictionary<string, Sprite>();

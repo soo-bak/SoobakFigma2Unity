@@ -31,10 +31,9 @@ namespace SoobakFigma2Unity.Editor.Converters
             var rt = go.GetComponent<RectTransform>();
 
             // Apply fills
-            ApplyFills(go, node, ctx);
+            var image_ = ApplyFills(go, node, ctx);
 
             // Apply blend mode
-            var image_ = go.GetComponent<Image>();
             if (image_ != null && !string.IsNullOrEmpty(node.BlendMode))
                 BlendModeHelper.TryApply(image_, node.BlendMode, ctx.Logger);
 
@@ -107,24 +106,18 @@ namespace SoobakFigma2Unity.Editor.Converters
             return go;
         }
 
-        private void ApplyFills(GameObject go, FigmaNode node, ImportContext ctx)
+        private Image ApplyFills(GameObject go, FigmaNode node, ImportContext ctx)
         {
             // Check rasterized sprite FIRST — even if no visible fills, the node
             // may have been rasterized for effects/shadows/masks/etc. We must apply
             // the sprite or the node will appear empty (e.g., Frame 3845 with shadow).
             if (ctx.NodeSprites.TryGetValue(node.Id, out var sprite))
             {
-                var image = go.AddComponent<Image>();
-                image.sprite = sprite;
-                image.type = (sprite.border != UnityEngine.Vector4.zero)
-                    ? Image.Type.Sliced
-                    : Image.Type.Simple;
-                image.preserveAspect = false;
-                return;
+                return RasterImageRenderer.Apply(go, node, ctx, sprite, forceSameObject: node.IsMask);
             }
 
             if (!node.HasVisibleFills)
-                return;
+                return null;
 
             // Solid color optimization — fill color uses only fill's own alpha+opacity.
             // node.Opacity is applied via CanvasGroup at end of Convert (already in place).
@@ -145,7 +138,7 @@ namespace SoobakFigma2Unity.Editor.Converters
                             image.type = Image.Type.Sliced;
                         }
                     }
-                    return;
+                    return image;
                 }
             }
 
@@ -162,11 +155,13 @@ namespace SoobakFigma2Unity.Editor.Converters
                             image.sprite = fillSprite;
                             image.type = Image.Type.Simple;
                             image.preserveAspect = fill.ScaleMode == "FIT";
-                            return;
+                            return image;
                         }
                     }
                 }
             }
+
+            return null;
         }
     }
 }

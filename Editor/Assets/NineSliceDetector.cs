@@ -8,11 +8,9 @@ namespace SoobakFigma2Unity.Editor.Assets
     /// Detects 9-slice candidates from Figma node properties and
     /// calculates appropriate sprite border values.
     ///
-    /// Detection heuristics:
-    /// 1. Node has cornerRadius > 0 → border = cornerRadius * scale
-    /// 2. Node has uniform rectangleCornerRadii → symmetric borders
-    /// 3. Node has non-uniform rectangleCornerRadii → per-corner borders
-    /// 4. Node is used as a component instance at multiple sizes → strong 9-slice candidate
+    /// Detection is intentionally conservative: only simple rounded visuals that Figma
+    /// constraints/layout say should scale are sliced. Everything else keeps the exact
+    /// Figma raster so Unity does not reshape curves or edge pixels.
     /// </summary>
     internal sealed class NineSliceDetector
     {
@@ -55,23 +53,78 @@ namespace SoobakFigma2Unity.Editor.Assets
         /// </summary>
         public bool IsCandidate(FigmaNode node)
         {
-            // Must have corner radius
-            if (node.CornerRadius <= 0 &&
-                (node.RectangleCornerRadii == null || node.RectangleCornerRadii.Length < 4))
+            if (!ShouldScaleLikeNineSlice(node))
                 return false;
 
-            // Must have fills (otherwise no image to slice)
-            if (!node.HasVisibleFills)
+            if (!HasRoundedCorners(node))
                 return false;
 
-            // Skip very small nodes (icons, etc.)
             if (node.Width < 16 || node.Height < 16)
                 return false;
 
-            // Node type should be FRAME or RECTANGLE (not vectors or text)
+            if (!IsSimpleSlicableVisual(node))
+                return false;
+
+            return true;
+        }
+
+        private static bool ShouldScaleLikeNineSlice(FigmaNode node)
+        {
+            if (node.Constraints != null &&
+                (node.Constraints.HorizontalType == ConstraintType.STRETCH ||
+                 node.Constraints.VerticalType == ConstraintType.STRETCH ||
+                 node.Constraints.HorizontalType == ConstraintType.SCALE ||
+                 node.Constraints.VerticalType == ConstraintType.SCALE))
+                return true;
+
+            return node.LayoutGrow > 0f ||
+                   node.LayoutAlign == "STRETCH" ||
+                   node.LayoutSizingHorizontal == "FILL" ||
+                   node.LayoutSizingVertical == "FILL";
+        }
+
+        private static bool HasRoundedCorners(FigmaNode node)
+        {
+            if (node.CornerRadius > 0f)
+                return true;
+            if (node.RectangleCornerRadii == null || node.RectangleCornerRadii.Length != 4)
+                return false;
+            return node.RectangleCornerRadii[0] > 0f ||
+                   node.RectangleCornerRadii[1] > 0f ||
+                   node.RectangleCornerRadii[2] > 0f ||
+                   node.RectangleCornerRadii[3] > 0f;
+        }
+
+        private static bool IsSimpleSlicableVisual(FigmaNode node)
+        {
             var t = node.NodeType;
-            if (t != FigmaNodeType.FRAME && t != FigmaNodeType.RECTANGLE &&
-                t != FigmaNodeType.COMPONENT && t != FigmaNodeType.INSTANCE)
+            if (t != FigmaNodeType.FRAME && t != FigmaNodeType.GROUP &&
+                t != FigmaNodeType.RECTANGLE && t != FigmaNodeType.COMPONENT &&
+                t != FigmaNodeType.INSTANCE)
+                return false;
+
+            if (!node.HasVisibleFills)
+                return false;
+
+            if (node.Fills != null)
+            {
+                foreach (var fill in node.Fills)
+                {
+                    if (!fill.Visible || fill.Opacity <= 0f)
+                        continue;
+                    if (!fill.IsSolid)
+                        return false;
+                }
+            }
+
+            if (node.Effects != null)
+            {
+                foreach (var effect in node.Effects)
+                    if (effect.Visible)
+                        return false;
+            }
+
+            if (node.StrokeAlign == "OUTSIDE")
                 return false;
 
             return true;

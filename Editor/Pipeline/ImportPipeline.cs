@@ -70,8 +70,31 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 progress.Step($"Downloading {ctx.NodesToRasterize.Count} images...");
                 var downloader = new ImageDownloader(api, _logger);
                 if (ctx.NodesToRasterize.Count > 0)
-                    ctx.NodeImagePaths = await downloader.DownloadNodeImagesAsync(
-                        fileKey, ctx.NodesToRasterize.ToList(), GetTempImageDir(), profile.ImageScale, ct);
+                {
+                    var absoluteBoundsNodes = ctx.NodesToRasterize
+                        .Where(id => !ctx.NodeRasterBoundsModes.TryGetValue(id, out var mode) ||
+                                     mode == RasterBoundsMode.AbsoluteBounds)
+                        .ToList();
+                    var renderBoundsNodes = ctx.NodesToRasterize
+                        .Where(id => ctx.NodeRasterBoundsModes.TryGetValue(id, out var mode) &&
+                                     mode == RasterBoundsMode.RenderBounds)
+                        .ToList();
+
+                    var nodeImagePaths = new Dictionary<string, string>();
+                    if (absoluteBoundsNodes.Count > 0)
+                    {
+                        var paths = await downloader.DownloadNodeImagesAsync(
+                            fileKey, absoluteBoundsNodes, GetTempImageDir(), profile.ImageScale, true, ct);
+                        foreach (var kv in paths) nodeImagePaths[kv.Key] = kv.Value;
+                    }
+                    if (renderBoundsNodes.Count > 0)
+                    {
+                        var paths = await downloader.DownloadNodeImagesAsync(
+                            fileKey, renderBoundsNodes, GetTempImageDir(), profile.ImageScale, false, ct);
+                        foreach (var kv in paths) nodeImagePaths[kv.Key] = kv.Value;
+                    }
+                    ctx.NodeImagePaths = nodeImagePaths;
+                }
                 if (ctx.ImageFillRefs.Count > 0)
                     ctx.FillImagePaths = await downloader.DownloadImageFillsAsync(
                         fileKey, ctx.ImageFillRefs, GetTempImageDir(), ct);
@@ -292,10 +315,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             // Apply rasterized sprite first (handles effects/shadows even without visible fills)
             if (ctx.NodeSprites.TryGetValue(node.Id, out var sprite))
             {
-                var img = go.AddComponent<UnityEngine.UI.Image>();
-                img.sprite = sprite;
-                img.type = sprite.border != Vector4.zero
-                    ? UnityEngine.UI.Image.Type.Sliced : UnityEngine.UI.Image.Type.Simple;
+                RasterImageRenderer.Apply(go, node, ctx, sprite, forceSameObject: node.IsMask);
             }
             else if (node.HasVisibleFills)
             {
@@ -432,6 +452,10 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 ctx.NodeSprites[kv.Key] = s;
                 if (nineSlice != null && ctx.NodeIndex.TryGetValue(kv.Key, out var node))
                 {
+                    if (ctx.NodeRasterBoundsModes.TryGetValue(kv.Key, out var mode) &&
+                        mode == RasterBoundsMode.RenderBounds)
+                        continue;
+
                     var borders = nineSlice.DetectBorders(node);
                     if (borders != Vector4.zero)
                     {
@@ -457,6 +481,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (needsRaster)
             {
                 ctx.NodesToRasterize.Add(node.Id);
+                ctx.NodeRasterBoundsModes[node.Id] = ChooseRasterBoundsMode(node);
                 // Node will be rasterized as a whole — don't also download the raw fill image
                 // (raw fill is the uncropped sprite sheet, rasterization gives the correct crop)
             }
@@ -471,6 +496,31 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (node.Children != null)
                 foreach (var child in node.Children)
                     CollectImageRequirements(child, ctx);
+        }
+
+        private static RasterBoundsMode ChooseRasterBoundsMode(FigmaNode node)
+        {
+            if (node == null || node.IsMask || node.ClipsContent)
+                return RasterBoundsMode.AbsoluteBounds;
+            if (node.AbsoluteBoundingBox == null || node.AbsoluteRenderBounds == null)
+                return RasterBoundsMode.AbsoluteBounds;
+
+            if (!ExtendsOutsideLayoutBounds(node.AbsoluteBoundingBox, node.AbsoluteRenderBounds))
+                return RasterBoundsMode.AbsoluteBounds;
+
+            // If Figma renders pixels outside the layout box (outside stroke, shadow,
+            // blur, anti-aliased vector bounds), absolute-bounds export clips the edge.
+            // Use render bounds and place the PNG as an offset visual child instead.
+            return RasterBoundsMode.RenderBounds;
+        }
+
+        private static bool ExtendsOutsideLayoutBounds(FigmaRectangle layout, FigmaRectangle render)
+        {
+            const float epsilon = 0.25f;
+            return render.X < layout.X - epsilon ||
+                   render.Y < layout.Y - epsilon ||
+                   render.X + render.Width > layout.X + layout.Width + epsilon ||
+                   render.Y + render.Height > layout.Y + layout.Height + epsilon;
         }
 
         private static bool IsEmptyGroup(FigmaNode n) =>

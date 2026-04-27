@@ -1,6 +1,7 @@
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
 using SoobakFigma2Unity.Runtime;
+using SoobakFigma2Unity.Editor.Assets;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -33,11 +34,7 @@ namespace SoobakFigma2Unity.Editor.Converters
 
             if (ctx.NodeSprites.TryGetValue(node.Id, out var sprite))
             {
-                var image = go.AddComponent<Image>();
-                image.sprite = sprite;
-                image.type = Image.Type.Simple;
-                image.preserveAspect = true;
-                image.raycastTarget = false;
+                RasterImageRenderer.Apply(go, node, ctx, sprite, raycastTarget: false, forceSameObject: node.IsMask);
             }
             else
             {

@@ -62,6 +62,16 @@ namespace SoobakFigma2Unity.Editor.Assets
                 importer.filterMode = FilterMode.Bilinear;
                 importer.spritePixelsPerUnit = 100f * scale;
                 importer.spriteBorder = new Vector4(radiusPx, radiusPx, radiusPx, radiusPx);
+                importer.textureCompression = TextureImporterCompression.Uncompressed;
+
+                // FullRect sprite mesh — Tight would clip the soft corner alpha and
+                // collide with the spriteBorder rectangle we just set, defeating the
+                // 9-slice that's the whole point of this generated asset.
+                var settings = new TextureImporterSettings();
+                importer.ReadTextureSettings(settings);
+                settings.spriteMeshType = SpriteMeshType.FullRect;
+                importer.SetTextureSettings(settings);
+
                 importer.SaveAndReimport();
             }
 

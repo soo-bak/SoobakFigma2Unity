@@ -106,7 +106,33 @@ namespace SoobakFigma2Unity.Editor.Assets
                 if (importer.isReadable)
                 { importer.isReadable = false; needsChange = true; }
 
-                importer.textureCompression = TextureImporterCompression.Compressed;
+                // FullRect mesh keeps the sprite quad covering every pixel — including the
+                // transparent ones around drop shadows, glows, or padded borders. The default
+                // (Tight) generates a polygon hugging the visible alpha, which:
+                //   • Crops the corners of 9-sliced sprites so border regions render wrong
+                //   • Cuts off shadows that bleed past the layout bounding box
+                //   • Misaligns visuals against the RectTransform whenever there's
+                //     transparent margin (almost every Figma export)
+                // Match the size we got from use_absolute_bounds=true — anything tighter is
+                // a fight with the sprite quad we paid for.
+                var settings = new TextureImporterSettings();
+                importer.ReadTextureSettings(settings);
+                if (settings.spriteMeshType != SpriteMeshType.FullRect)
+                {
+                    settings.spriteMeshType = SpriteMeshType.FullRect;
+                    importer.SetTextureSettings(settings);
+                    needsChange = true;
+                }
+
+                // Uncompressed by default: DXT/BC compression chews alpha gradients and
+                // turns clean Figma edges into ringed artifacts. UI sprites are usually
+                // small enough that the memory cost is negligible compared to the visual
+                // regression compressed formats introduce.
+                if (importer.textureCompression != TextureImporterCompression.Uncompressed)
+                {
+                    importer.textureCompression = TextureImporterCompression.Uncompressed;
+                    needsChange = true;
+                }
 
                 if (needsChange)
                 {

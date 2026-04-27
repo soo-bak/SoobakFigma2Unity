@@ -5,11 +5,10 @@ using SoobakFigma2Unity.Editor.Converters;
 using SoobakFigma2Unity.Editor.Mapping;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
-using SoobakFigma2Unity.Editor.Settings;
 using SoobakFigma2Unity.Editor.Util;
-using SoobakFigma2Unity.Runtime;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace SoobakFigma2Unity.Editor.Prefabs
 {
@@ -86,7 +85,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             stateMapper.TryApplyStates(baseGo, componentSetNode, variantNodeMap, ctx);
 
             // Base component prefab owns the manifest; variants inherit it via prefab linkage.
-            ManifestBuilder.AttachRootManifest(baseGo, ctx, baseVariant.ComponentId);
+            ManifestBuilder.AttachRootManifest(baseGo, ctx);
             var basePrefab = PrefabUtility.SaveAsPrefabAsset(baseGo, basePath);
             result[baseVariant.ComponentId] = basePath;
             ctx.GeneratedPrefabs[baseVariant.ComponentId] = basePath;
@@ -106,8 +105,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 var basePrefabInstance = (GameObject)PrefabUtility.InstantiatePrefab(basePrefab);
 
                 // Apply visual differences from the variant
-                ApplyOverrides(basePrefabInstance, variantGo, ctx, FigmaManagedTypesRegistryProvider.Get());
-                ManifestBuilder.AttachRootManifest(basePrefabInstance, ctx, variant.ComponentId);
+                ApplyOverrides(basePrefabInstance, variantGo);
 
                 var variantPrefab = PrefabUtility.SaveAsPrefabAsset(basePrefabInstance, variantPath);
                 result[variant.ComponentId] = variantPath;
@@ -123,267 +121,122 @@ namespace SoobakFigma2Unity.Editor.Prefabs
 
         /// <summary>
         /// Apply visual differences from source (variant) onto target (base prefab instance).
-        /// Variant COMPONENT children do not share node IDs across variants, so matching
-        /// uses Figma metadata first (component property refs / componentId), then sibling
-        /// occurrence. This avoids the duplicate-name failure mode common in buttons
-        /// (left icon and right icon both named "icon").
+        /// Recurses by name; copies property overrides on every match. Structural diffs —
+        /// children present in only one of the two trees — are flagged in the log and left
+        /// alone for now. The previous attempt to UnityEngine.Object.Instantiate variant-only
+        /// subtrees into the base prefab triggered a Unity assertion on save when the cloned
+        /// subtree contained a nested PrefabInstance, because the freshly-cloned objects
+        /// inherit DontSaveInEditor flags from the source's editor-only state. The right fix
+        /// is to either (a) extract structurally-distinct variants as independent prefabs
+        /// instead of forcing them into a Variant chain, or (b) clone via SerializedObject
+        /// so the prefab payload stays save-safe — both deferred to a follow-up pass.
         /// </summary>
-        private void ApplyOverrides(
-            GameObject target,
-            GameObject source,
-            ImportContext ctx,
-            FigmaManagedTypesRegistry policy)
+        private void ApplyOverrides(GameObject target, GameObject source)
         {
-            SyncIdentity(target.transform, source.transform, ctx);
-            if (target.activeSelf != source.activeSelf)
-                target.SetActive(source.activeSelf);
+            ApplyComponentOverrides(target, source);
 
-            ApplyComponentOverrides(target, source, policy);
-
-            var targetChildren = new List<Transform>();
+            var targetChildren = new Dictionary<string, Transform>();
             for (int i = 0; i < target.transform.childCount; i++)
-                targetChildren.Add(target.transform.GetChild(i));
-
-            var sourceChildren = new List<Transform>();
-            for (int i = 0; i < source.transform.childCount; i++)
-                sourceChildren.Add(source.transform.GetChild(i));
-
-            var targetManifest = target.GetComponentInParent<FigmaPrefabManifest>(true);
-            var targetById = BuildTargetByNodeId(targetChildren, targetManifest);
-            var targetBySemanticKey = BuildTargetBySemanticKey(targetChildren, ctx, targetManifest);
-            var targetByOccurrenceKey = BuildTargetByOccurrenceKey(targetChildren, ctx, targetManifest);
-            var sourceSemanticCounts = CountSourceSemanticKeys(sourceChildren, ctx);
-            var sourceOccurrenceIndex = new Dictionary<string, int>();
-            var matchedTargets = new HashSet<Transform>();
-
-            for (int i = 0; i < sourceChildren.Count; i++)
             {
-                var sourceChild = sourceChildren[i];
-                var sourceNode = GetNodeForSource(sourceChild, ctx);
-                var targetChild = FindMatchingTargetChild(
-                    sourceChild,
-                    sourceNode,
-                    targetById,
-                    targetBySemanticKey,
-                    targetByOccurrenceKey,
-                    sourceSemanticCounts,
-                    sourceOccurrenceIndex,
-                    matchedTargets);
+                var c = target.transform.GetChild(i);
+                targetChildren[c.name] = c;
+            }
+            var sourceChildren = new Dictionary<string, Transform>();
+            for (int i = 0; i < source.transform.childCount; i++)
+            {
+                var c = source.transform.GetChild(i);
+                sourceChildren[c.name] = c;
+            }
 
-                if (targetChild != null)
+            for (int i = 0; i < source.transform.childCount; i++)
+            {
+                var sourceChild = source.transform.GetChild(i);
+                if (targetChildren.TryGetValue(sourceChild.name, out var targetChild))
                 {
-                    targetChild.SetSiblingIndex(i);
-                    matchedTargets.Add(targetChild);
-                    ApplyOverrides(targetChild.gameObject, sourceChild.gameObject, ctx, policy);
+                    ApplyOverrides(targetChild.gameObject, sourceChild.gameObject);
                 }
                 else
                 {
-                    var added = UnityEngine.Object.Instantiate(sourceChild.gameObject, target.transform);
-                    added.name = sourceChild.name;
-                    added.transform.SetSiblingIndex(i);
-                    CopyIdentityRecursive(sourceChild, added.transform, ctx);
-                    matchedTargets.Add(added.transform);
+                    _logger?.Warn($"Variant '{source.name}' has a child '{sourceChild.name}' the base prefab doesn't — skipping (structural variant; will look incorrect until promoted to an independent prefab).");
                 }
             }
 
-            foreach (var child in targetChildren)
+            foreach (var pair in targetChildren)
             {
-                if (matchedTargets.Contains(child)) continue;
-                if (child.gameObject.activeSelf)
-                    child.gameObject.SetActive(false);
+                if (sourceChildren.ContainsKey(pair.Key)) continue;
+                _logger?.Warn($"Variant '{source.name}' is missing base child '{pair.Key}' — leaving it visible (structural variant).");
             }
         }
 
-        private void ApplyComponentOverrides(
-            GameObject target,
-            GameObject source,
-            FigmaManagedTypesRegistry policy)
+        private void ApplyComponentOverrides(GameObject target, GameObject source)
         {
-            ComponentMerger.SyncComponents(source, target, null, policy);
-        }
-
-        private static Dictionary<string, Transform> BuildTargetByNodeId(
-            List<Transform> targetChildren,
-            FigmaPrefabManifest manifest)
-        {
-            var result = new Dictionary<string, Transform>();
-            if (manifest == null) return result;
-
-            foreach (var child in targetChildren)
+            // RectTransform — full sync. The previous version only copied sizeDelta,
+            // which left every variant inheriting the base's anchors/pivot/position
+            // and produced visually wrong results for variants that moved or re-anchored
+            // their children (which is most of them in real design systems).
+            var targetRt = target.GetComponent<RectTransform>();
+            var sourceRt = source.GetComponent<RectTransform>();
+            if (targetRt != null && sourceRt != null)
             {
-                var id = manifest.GetNodeId(child);
-                if (!string.IsNullOrEmpty(id))
-                    result[id] = child;
-            }
-            return result;
-        }
-
-        private static Dictionary<string, List<Transform>> BuildTargetBySemanticKey(
-            List<Transform> targetChildren,
-            ImportContext ctx,
-            FigmaPrefabManifest manifest)
-        {
-            var result = new Dictionary<string, List<Transform>>();
-            foreach (var child in targetChildren)
-            {
-                var key = GetSemanticKey(GetNodeForTarget(child, ctx, manifest));
-                if (string.IsNullOrEmpty(key)) continue;
-                if (!result.TryGetValue(key, out var list))
-                {
-                    list = new List<Transform>();
-                    result[key] = list;
-                }
-                list.Add(child);
-            }
-            return result;
-        }
-
-        private static Dictionary<string, List<Transform>> BuildTargetByOccurrenceKey(
-            List<Transform> targetChildren,
-            ImportContext ctx,
-            FigmaPrefabManifest manifest)
-        {
-            var result = new Dictionary<string, List<Transform>>();
-            foreach (var child in targetChildren)
-            {
-                var key = GetOccurrenceKey(GetNodeForTarget(child, ctx, manifest), child.name);
-                if (!result.TryGetValue(key, out var list))
-                {
-                    list = new List<Transform>();
-                    result[key] = list;
-                }
-                list.Add(child);
-            }
-            return result;
-        }
-
-        private static Dictionary<string, int> CountSourceSemanticKeys(List<Transform> sourceChildren, ImportContext ctx)
-        {
-            var result = new Dictionary<string, int>();
-            foreach (var sourceChild in sourceChildren)
-            {
-                var key = GetSemanticKey(GetNodeForSource(sourceChild, ctx));
-                if (string.IsNullOrEmpty(key)) continue;
-                result[key] = result.TryGetValue(key, out var count) ? count + 1 : 1;
-            }
-            return result;
-        }
-
-        private static Transform FindMatchingTargetChild(
-            Transform sourceChild,
-            FigmaNode sourceNode,
-            Dictionary<string, Transform> targetById,
-            Dictionary<string, List<Transform>> targetBySemanticKey,
-            Dictionary<string, List<Transform>> targetByOccurrenceKey,
-            Dictionary<string, int> sourceSemanticCounts,
-            Dictionary<string, int> sourceOccurrenceIndex,
-            HashSet<Transform> matchedTargets)
-        {
-            var sourceId = sourceNode?.Id;
-            if (!string.IsNullOrEmpty(sourceId)
-                && targetById.TryGetValue(sourceId, out var byId)
-                && !matchedTargets.Contains(byId))
-                return byId;
-
-            var semanticKey = GetSemanticKey(sourceNode);
-            if (!string.IsNullOrEmpty(semanticKey)
-                && sourceSemanticCounts.TryGetValue(semanticKey, out var sourceCount)
-                && sourceCount == 1
-                && targetBySemanticKey.TryGetValue(semanticKey, out var semanticTargets)
-                && semanticTargets.Count == 1
-                && !matchedTargets.Contains(semanticTargets[0]))
-                return semanticTargets[0];
-
-            var occurrenceKey = GetOccurrenceKey(sourceNode, sourceChild.name);
-            var occurrence = sourceOccurrenceIndex.TryGetValue(occurrenceKey, out var index) ? index : 0;
-            sourceOccurrenceIndex[occurrenceKey] = occurrence + 1;
-
-            if (targetByOccurrenceKey.TryGetValue(occurrenceKey, out var occurrenceTargets))
-            {
-                for (int i = occurrence; i < occurrenceTargets.Count; i++)
-                    if (!matchedTargets.Contains(occurrenceTargets[i]))
-                        return occurrenceTargets[i];
-                for (int i = 0; i < occurrenceTargets.Count; i++)
-                    if (!matchedTargets.Contains(occurrenceTargets[i]))
-                        return occurrenceTargets[i];
+                if (targetRt.anchorMin       != sourceRt.anchorMin)       targetRt.anchorMin       = sourceRt.anchorMin;
+                if (targetRt.anchorMax       != sourceRt.anchorMax)       targetRt.anchorMax       = sourceRt.anchorMax;
+                if (targetRt.pivot           != sourceRt.pivot)           targetRt.pivot           = sourceRt.pivot;
+                if (targetRt.sizeDelta       != sourceRt.sizeDelta)       targetRt.sizeDelta       = sourceRt.sizeDelta;
+                if (targetRt.anchoredPosition != sourceRt.anchoredPosition) targetRt.anchoredPosition = sourceRt.anchoredPosition;
+                if (targetRt.localRotation   != sourceRt.localRotation)   targetRt.localRotation   = sourceRt.localRotation;
+                if (targetRt.localScale      != sourceRt.localScale)      targetRt.localScale      = sourceRt.localScale;
             }
 
-            return null;
-        }
-
-        private static FigmaNode GetNodeForSource(Transform source, ImportContext ctx)
-        {
-            if (ctx != null
-                && ctx.NodeIdentities.TryGetValue(source, out var identity)
-                && !string.IsNullOrEmpty(identity.FigmaNodeId))
-                return TryGetNode(ctx, identity.FigmaNodeId);
-            return null;
-        }
-
-        private static FigmaNode GetNodeForTarget(
-            Transform target,
-            ImportContext ctx,
-            FigmaPrefabManifest manifest)
-        {
-            var id = manifest?.GetNodeId(target);
-            return TryGetNode(ctx, id);
-        }
-
-        private static FigmaNode TryGetNode(ImportContext ctx, string id)
-        {
-            if (ctx == null || string.IsNullOrEmpty(id)) return null;
-            if (ctx.NodeIndex.TryGetValue(id, out var node)) return node;
-
-            var sourceId = GetInstanceSourceNodeId(id);
-            if (!string.IsNullOrEmpty(sourceId) && ctx.NodeIndex.TryGetValue(sourceId, out node))
-                return node;
-
-            return null;
-        }
-
-        private static string GetSemanticKey(FigmaNode node)
-        {
-            if (node == null) return null;
-
-            if (node.ComponentPropertyReferences != null && node.ComponentPropertyReferences.Count > 0)
+            // Image — sprite, color, plus type/preserveAspect/fillCenter so 9-slice
+            // and aspect-locked variants don't degenerate into stretched simple sprites.
+            var targetImage = target.GetComponent<Image>();
+            var sourceImage = source.GetComponent<Image>();
+            if (targetImage != null && sourceImage != null)
             {
-                var refs = node.ComponentPropertyReferences
-                    .OrderBy(kv => kv.Key)
-                    .Select(kv => $"{kv.Key}={kv.Value}");
-                return $"{node.Type}|{node.Name}|refs:{string.Join(";", refs)}";
+                if (targetImage.color           != sourceImage.color)           targetImage.color           = sourceImage.color;
+                if (targetImage.sprite          != sourceImage.sprite)          targetImage.sprite          = sourceImage.sprite;
+                if (targetImage.type            != sourceImage.type)            targetImage.type            = sourceImage.type;
+                if (targetImage.preserveAspect  != sourceImage.preserveAspect)  targetImage.preserveAspect  = sourceImage.preserveAspect;
+                if (targetImage.fillCenter      != sourceImage.fillCenter)      targetImage.fillCenter      = sourceImage.fillCenter;
             }
 
-            if (!string.IsNullOrEmpty(node.ComponentId))
-                return $"{node.Type}|{node.Name}|component:{node.ComponentId}";
+            // TextMeshProUGUI — text, color, fontSize, alignment, font asset.
+            var targetText = target.GetComponent<TMPro.TextMeshProUGUI>();
+            var sourceText = source.GetComponent<TMPro.TextMeshProUGUI>();
+            if (targetText != null && sourceText != null)
+            {
+                if (targetText.text      != sourceText.text)               targetText.text      = sourceText.text;
+                if (targetText.color     != sourceText.color)              targetText.color     = sourceText.color;
+                if (!Mathf.Approximately(targetText.fontSize, sourceText.fontSize)) targetText.fontSize = sourceText.fontSize;
+                if (targetText.alignment != sourceText.alignment)          targetText.alignment = sourceText.alignment;
+                if (targetText.font      != sourceText.font && sourceText.font != null) targetText.font = sourceText.font;
+                if (targetText.fontStyle != sourceText.fontStyle)          targetText.fontStyle = sourceText.fontStyle;
+            }
 
-            return $"{node.Type}|{node.Name}";
-        }
+            // CanvasGroup (opacity).
+            var targetCg = target.GetComponent<CanvasGroup>();
+            var sourceCg = source.GetComponent<CanvasGroup>();
+            if (sourceCg != null)
+            {
+                if (targetCg == null) targetCg = target.AddComponent<CanvasGroup>();
+                if (!Mathf.Approximately(targetCg.alpha, sourceCg.alpha)) targetCg.alpha = sourceCg.alpha;
+            }
 
-        private static string GetOccurrenceKey(FigmaNode node, string fallbackName)
-        {
-            if (node == null)
-                return fallbackName ?? string.Empty;
-            return $"{node.Type}|{node.Name}";
-        }
-
-        private static string GetInstanceSourceNodeId(string nodeId)
-        {
-            var semi = nodeId?.LastIndexOf(';') ?? -1;
-            return semi >= 0 && semi + 1 < nodeId.Length ? nodeId.Substring(semi + 1) : null;
-        }
-
-        private static void SyncIdentity(Transform target, Transform source, ImportContext ctx)
-        {
-            if (ctx != null && ctx.NodeIdentities.TryGetValue(source, out var identity))
-                ctx.NodeIdentities[target] = identity;
-        }
-
-        private static void CopyIdentityRecursive(Transform source, Transform target, ImportContext ctx)
-        {
-            SyncIdentity(target, source, ctx);
-            int count = Mathf.Min(source.childCount, target.childCount);
-            for (int i = 0; i < count; i++)
-                CopyIdentityRecursive(source.GetChild(i), target.GetChild(i), ctx);
+            // LayoutElement — preferred / min / flexible sizes drive how the parent
+            // LayoutGroup positions this object, so per-variant layout differences
+            // (a wider button having a wider preferredWidth) need to come through.
+            var targetLe = target.GetComponent<LayoutElement>();
+            var sourceLe = source.GetComponent<LayoutElement>();
+            if (sourceLe != null)
+            {
+                if (targetLe == null) targetLe = target.AddComponent<LayoutElement>();
+                if (!Mathf.Approximately(targetLe.preferredWidth,  sourceLe.preferredWidth))  targetLe.preferredWidth  = sourceLe.preferredWidth;
+                if (!Mathf.Approximately(targetLe.preferredHeight, sourceLe.preferredHeight)) targetLe.preferredHeight = sourceLe.preferredHeight;
+                if (!Mathf.Approximately(targetLe.minWidth,        sourceLe.minWidth))        targetLe.minWidth        = sourceLe.minWidth;
+                if (!Mathf.Approximately(targetLe.minHeight,       sourceLe.minHeight))       targetLe.minHeight       = sourceLe.minHeight;
+                if (!Mathf.Approximately(targetLe.flexibleWidth,   sourceLe.flexibleWidth))   targetLe.flexibleWidth   = sourceLe.flexibleWidth;
+                if (!Mathf.Approximately(targetLe.flexibleHeight,  sourceLe.flexibleHeight))  targetLe.flexibleHeight  = sourceLe.flexibleHeight;
+            }
         }
 
         /// <summary>

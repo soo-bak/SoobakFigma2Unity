@@ -8,52 +8,10 @@ namespace SoobakFigma2Unity.Editor.Models
         [JsonProperty("vertical")] public string Vertical;
         [JsonProperty("horizontal")] public string Horizontal;
 
-        public ConstraintType VerticalType => ParseVertical(Vertical);
+        public ConstraintType VerticalType =>
+            System.Enum.TryParse<ConstraintType>(Vertical, out var t) ? t : ConstraintType.MIN;
 
-        public ConstraintType HorizontalType => ParseHorizontal(Horizontal);
-
-        private static ConstraintType ParseVertical(string value)
-        {
-            switch (value)
-            {
-                case "TOP":
-                case "MIN":
-                    return ConstraintType.MIN;
-                case "BOTTOM":
-                case "MAX":
-                    return ConstraintType.MAX;
-                case "TOP_BOTTOM":
-                case "STRETCH":
-                    return ConstraintType.STRETCH;
-                case "CENTER":
-                    return ConstraintType.CENTER;
-                case "SCALE":
-                    return ConstraintType.SCALE;
-                default:
-                    return ConstraintType.MIN;
-            }
-        }
-
-        private static ConstraintType ParseHorizontal(string value)
-        {
-            switch (value)
-            {
-                case "LEFT":
-                case "MIN":
-                    return ConstraintType.MIN;
-                case "RIGHT":
-                case "MAX":
-                    return ConstraintType.MAX;
-                case "LEFT_RIGHT":
-                case "STRETCH":
-                    return ConstraintType.STRETCH;
-                case "CENTER":
-                    return ConstraintType.CENTER;
-                case "SCALE":
-                    return ConstraintType.SCALE;
-                default:
-                    return ConstraintType.MIN;
-            }
-        }
+        public ConstraintType HorizontalType =>
+            System.Enum.TryParse<ConstraintType>(Horizontal, out var t) ? t : ConstraintType.MIN;
     }
 }

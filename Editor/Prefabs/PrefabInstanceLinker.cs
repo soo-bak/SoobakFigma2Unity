@@ -1,10 +1,8 @@
 using System.Collections.Generic;
-using System.Linq;
 using SoobakFigma2Unity.Editor.Color;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
 using SoobakFigma2Unity.Editor.Util;
-using SoobakFigma2Unity.Runtime;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
@@ -97,8 +95,8 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 }
             }
 
-            // Recursively apply child overrides by Figma identity/metadata. Pass the
-            // INSTANCE's componentProperties down so child componentPropertyReferences can resolve
+            // Recursively apply child overrides by matching names. Pass the INSTANCE's
+            // componentProperties down so child componentPropertyReferences can resolve
             // (BOOLEAN → SetActive, TEXT → TMP.text). PrefabUtility.RecordPrefabInstance...
             // is invoked at the end so Unity registers the changes as proper overrides
             // on the PrefabInstance rather than leaving them as un-tracked edits.
@@ -116,10 +114,10 @@ namespace SoobakFigma2Unity.Editor.Prefabs
         {
             if (parentNode.Children == null) return;
 
-            var occurrenceIndex = new Dictionary<string, int>();
             foreach (var childNode in parentNode.Children)
             {
-                var childTransform = FindMatchingChild(parentGo.transform, childNode, ctx, occurrenceIndex);
+                // Find matching child in the prefab instance by name
+                var childTransform = parentGo.transform.Find(childNode.Name);
                 if (childTransform == null) continue;
 
                 var childGo = childTransform.gameObject;
@@ -185,111 +183,6 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 if (childNode.NodeType != FigmaNodeType.INSTANCE && childNode.Children != null)
                     ApplyChildOverrides(childGo, childNode, ctx, ownerProperties);
             }
-        }
-
-        private static Transform FindMatchingChild(
-            Transform parent,
-            FigmaNode childNode,
-            ImportContext ctx,
-            Dictionary<string, int> occurrenceIndex)
-        {
-            var manifest = parent.GetComponentInParent<FigmaPrefabManifest>(true);
-
-            if (manifest != null)
-            {
-                foreach (var candidateId in CandidateNodeIds(childNode.Id))
-                {
-                    if (string.IsNullOrEmpty(candidateId)) continue;
-                    for (int i = 0; i < parent.childCount; i++)
-                    {
-                        var child = parent.GetChild(i);
-                        if (manifest.GetNodeId(child) == candidateId)
-                            return child;
-                    }
-                }
-
-                var semanticKey = GetSemanticKey(childNode);
-                if (!string.IsNullOrEmpty(semanticKey))
-                {
-                    Transform match = null;
-                    int matches = 0;
-                    for (int i = 0; i < parent.childCount; i++)
-                    {
-                        var child = parent.GetChild(i);
-                        var targetNode = TryGetNode(ctx, manifest.GetNodeId(child));
-                        if (GetSemanticKey(targetNode) != semanticKey) continue;
-                        match = child;
-                        matches++;
-                    }
-                    if (matches == 1)
-                        return match;
-                }
-            }
-
-            var occurrenceKey = GetOccurrenceKey(childNode);
-            var occurrence = occurrenceIndex.TryGetValue(occurrenceKey, out var index) ? index : 0;
-            occurrenceIndex[occurrenceKey] = occurrence + 1;
-
-            var seen = 0;
-            for (int i = 0; i < parent.childCount; i++)
-            {
-                var child = parent.GetChild(i);
-                if (GetOccurrenceKey(TryGetNode(ctx, manifest?.GetNodeId(child)), child.name) != occurrenceKey)
-                    continue;
-                if (seen == occurrence)
-                    return child;
-                seen++;
-            }
-
-            return parent.Find(childNode.Name);
-        }
-
-        private static IEnumerable<string> CandidateNodeIds(string nodeId)
-        {
-            if (string.IsNullOrEmpty(nodeId)) yield break;
-            yield return nodeId;
-
-            var semi = nodeId.LastIndexOf(';');
-            if (semi >= 0 && semi + 1 < nodeId.Length)
-                yield return nodeId.Substring(semi + 1);
-        }
-
-        private static FigmaNode TryGetNode(ImportContext ctx, string id)
-        {
-            if (ctx == null || string.IsNullOrEmpty(id)) return null;
-            if (ctx.NodeIndex.TryGetValue(id, out var node)) return node;
-
-            var semi = id.LastIndexOf(';');
-            if (semi >= 0 && semi + 1 < id.Length)
-            {
-                var sourceId = id.Substring(semi + 1);
-                if (ctx.NodeIndex.TryGetValue(sourceId, out node))
-                    return node;
-            }
-
-            return null;
-        }
-
-        private static string GetSemanticKey(FigmaNode node)
-        {
-            if (node == null) return null;
-            if (node.ComponentPropertyReferences != null && node.ComponentPropertyReferences.Count > 0)
-            {
-                var refs = node.ComponentPropertyReferences
-                    .OrderBy(kv => kv.Key)
-                    .Select(kv => $"{kv.Key}={kv.Value}");
-                return $"{node.Type}|{node.Name}|refs:{string.Join(";", refs)}";
-            }
-            if (!string.IsNullOrEmpty(node.ComponentId))
-                return $"{node.Type}|{node.Name}|component:{node.ComponentId}";
-            return $"{node.Type}|{node.Name}";
-        }
-
-        private static string GetOccurrenceKey(FigmaNode node, string fallbackName = null)
-        {
-            if (node == null)
-                return fallbackName ?? string.Empty;
-            return $"{node.Type}|{node.Name}";
         }
 
         private static void ApplyComponentPropertyReferences(

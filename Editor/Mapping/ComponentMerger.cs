@@ -139,8 +139,8 @@ namespace SoobakFigma2Unity.Editor.Mapping
             dst.anchorMin = src.anchorMin;
             dst.anchorMax = src.anchorMax;
             dst.pivot = src.pivot;
-            dst.offsetMin = src.offsetMin;
-            dst.offsetMax = src.offsetMax;
+            dst.anchoredPosition3D = src.anchoredPosition3D;
+            dst.sizeDelta = src.sizeDelta;
             dst.localRotation = src.localRotation;
             dst.localScale = src.localScale;
         }

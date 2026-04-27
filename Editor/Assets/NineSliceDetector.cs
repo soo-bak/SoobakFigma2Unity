@@ -89,8 +89,8 @@ namespace SoobakFigma2Unity.Editor.Assets
             float border = Mathf.CeilToInt(radius * _imageScale);
 
             // Ensure border doesn't exceed half the image dimension
-            float maxH = Mathf.Floor(node.Width * _imageScale / 2f);
-            float maxV = Mathf.Floor(node.Height * _imageScale / 2f);
+            float maxH = MaxBorderWithCenter(node.Width);
+            float maxV = MaxBorderWithCenter(node.Height);
             border = Mathf.Min(border, Mathf.Min(maxH, maxV));
 
             if (border <= 0)
@@ -124,8 +124,8 @@ namespace SoobakFigma2Unity.Editor.Assets
             float bottom = Mathf.Max(bottomLeft, bottomRight) * _imageScale;
 
             // Clamp to half dimensions
-            float maxH = Mathf.Floor(node.Width * _imageScale / 2f);
-            float maxV = Mathf.Floor(node.Height * _imageScale / 2f);
+            float maxH = MaxBorderWithCenter(node.Width);
+            float maxV = MaxBorderWithCenter(node.Height);
             left = Mathf.Min(Mathf.CeilToInt(left), maxH);
             right = Mathf.Min(Mathf.CeilToInt(right), maxH);
             top = Mathf.Min(Mathf.CeilToInt(top), maxV);
@@ -137,6 +137,14 @@ namespace SoobakFigma2Unity.Editor.Assets
             _logger.Info($"{node.Name}: 9-slice detected (non-uniform, borders L={left} B={bottom} R={right} T={top})");
 
             return new Vector4(left, bottom, right, top);
+        }
+
+        private float MaxBorderWithCenter(float figmaSize)
+        {
+            // Unity sliced sprites need a non-empty center region. A pill with
+            // radius == height / 2 is common in Figma; using that exact value makes
+            // top + bottom consume the whole sprite and the sliced image degenerates.
+            return Mathf.Max(0f, Mathf.Floor((figmaSize * _imageScale - 1f) / 2f));
         }
     }
 }

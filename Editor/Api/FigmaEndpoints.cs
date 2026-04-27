@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace SoobakFigma2Unity.Editor.Api
 {
@@ -23,7 +24,8 @@ namespace SoobakFigma2Unity.Editor.Api
         public static string GetImages(string fileKey, IEnumerable<string> nodeIds, float scale = 2f, string format = "png")
         {
             var ids = string.Join(",", nodeIds);
-            return $"{BaseUrl}/images/{fileKey}?ids={System.Uri.EscapeDataString(ids)}&scale={scale}&format={format}";
+            var scaleText = scale.ToString(CultureInfo.InvariantCulture);
+            return $"{BaseUrl}/images/{fileKey}?ids={System.Uri.EscapeDataString(ids)}&scale={scaleText}&format={format}&use_absolute_bounds=true";
         }
 
         public static string GetImageFills(string fileKey)

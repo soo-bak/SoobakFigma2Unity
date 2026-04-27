@@ -784,12 +784,21 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         }
 
         // Visual leaves of a composite container — every node that gets its own PNG
-        // export and contributes a layer to the CPU composite. INSTANCEs of other
-        // components count: Figma will render them as their own PNG, and we blit that
-        // into the composite at the instance's offset (the instance's prefab linkage
-        // is lost in exchange — its visual is now baked into the parent composite).
-        // Walks depth-first so the caller can process leaves in Figma's document order
-        // (= z-order, bottom first).
+        // export and contributes a layer to the CPU composite. Walks depth-first so
+        // the caller can process leaves in Figma's document order (= z-order, bottom
+        // first).
+        //
+        // INSTANCE handling has two cases:
+        //   • INSTANCE with NO text inside → bake as one leaf. Figma's render of the
+        //     instance is exactly what we want — one decorative blob with no editable
+        //     text underneath, the instance's prefab linkage traded for fidelity.
+        //   • INSTANCE WITH text inside → must NOT bake the whole instance, otherwise
+        //     the inner text gets pixel-baked into the composite and the matching
+        //     TMP overlay (added later by AddTextOverlays) would draw on top of a
+        //     baked text artefact — exactly the doubled-text scenario the user
+        //     forbade. Walk into the instance instead so the inner decoratives go
+        //     into the composite individually and the inner text becomes its own
+        //     editable TMP.
         internal static void CollectDecorativeLeaves(FigmaNode node, System.Collections.Generic.List<FigmaNode> output)
         {
             if (node == null) return;
@@ -797,9 +806,13 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (t == FigmaNodeType.TEXT) return;
             if (t == FigmaNodeType.INSTANCE)
             {
-                // Each INSTANCE bakes as its own PNG layer in the composite. Don't dive
-                // into the instance's children — Figma's render of the INSTANCE already
-                // captures everything visible inside it.
+                if (HasTextDescendantInternal(node))
+                {
+                    if (node.Children != null)
+                        foreach (var c in node.Children)
+                            CollectDecorativeLeaves(c, output);
+                    return;
+                }
                 if (node.AbsoluteBoundingBox != null) output.Add(node);
                 return;
             }

@@ -362,39 +362,29 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
         private void GenerateComponentPrefabs(List<FigmaNode> frames, ImportContext ctx, ImportProfile profile)
         {
-            var components = new List<FigmaNode>();
-            var componentSets = new List<FigmaNode>();
-            foreach (var f in frames) CollectComponents(f, components, componentSets);
-            _logger.Info($"Found {components.Count} components, {componentSets.Count} component sets.");
-
-            if (profile.GeneratePrefabVariants)
+            // Auto-extraction pre-pass. Walks the entire imported subtree once to build
+            // a componentId inventory + dependency graph (for nested instances), then
+            // ensures each Figma component has a .prefab on disk with its componentId
+            // recorded in the manifest's RootComponentId so re-imports re-find it.
+            //
+            // After this method returns, ctx.GeneratedPrefabs is populated for every
+            // componentId the InstanceConverter will encounter — so PrefabInstanceLinker
+            // produces a real PrefabInstance instead of inlining the children.
+            if (!profile.ExtractFigmaComponentsAsPrefabs)
             {
-                var vb = new PrefabVariantBuilder(_logger);
-                foreach (var cs in componentSets)
-                {
-                    var chain = vb.BuildVariantChain(cs, n => ConvertNodeToGameObject(n, ctx, profile), profile.PrefabOutputPath, ctx);
-                    if (chain != null)
-                        foreach (var path in chain.Values)
-                            if (!string.IsNullOrEmpty(path)) SavedPrefabPaths.Add(path);
-                }
+                _logger.Info("Auto component extraction disabled (profile.ExtractFigmaComponentsAsPrefabs = false).");
+                return;
             }
-            foreach (var comp in components)
-            {
-                if (ctx.GeneratedPrefabs.ContainsKey(comp.Id)) continue;
-                if (ctx.Components.TryGetValue(comp.Id, out var m) && !string.IsNullOrEmpty(m.ComponentSetId)) continue;
-                var go = ConvertNodeToGameObject(comp, ctx, profile);
-                ctx.GeneratedPrefabs[comp.Id] = PrefabMerger.MergeOrSave(go, profile.PrefabOutputPath, comp.Name, ctx, profile.MergeMode, _logger);
-                if (!string.IsNullOrEmpty(ctx.GeneratedPrefabs[comp.Id])) SavedPrefabPaths.Add(ctx.GeneratedPrefabs[comp.Id]);
-                _logger.Success($"Component prefab: {ctx.GeneratedPrefabs[comp.Id]}");
-                Object.DestroyImmediate(go);
-            }
-        }
 
-        private void CollectComponents(FigmaNode node, List<FigmaNode> c, List<FigmaNode> cs)
-        {
-            if (node.NodeType == FigmaNodeType.COMPONENT_SET) { cs.Add(node); return; }
-            if (node.NodeType == FigmaNodeType.COMPONENT) c.Add(node);
-            if (node.Children != null) foreach (var ch in node.Children) CollectComponents(ch, c, cs);
+            var inventory = ComponentInventoryCollector.Collect(frames, ctx);
+            _logger.Info($"Component inventory: {inventory.AllComponentIds.Count} unique componentIds " +
+                         $"({inventory.ComponentMasters.Count} with master in tree, " +
+                         $"{inventory.AllComponentIds.Count - inventory.ComponentMasters.Count} external/instance-only).");
+
+            ComponentExtractionPass.Run(
+                frames, inventory, ctx, profile, _logger,
+                convertFunc: n => ConvertNodeToGameObject(n, ctx, profile),
+                registerSavedPath: p => SavedPrefabPaths.Add(p));
         }
 
         private GameObject ConvertNodeToGameObject(FigmaNode node, ImportContext ctx, ImportProfile profile)

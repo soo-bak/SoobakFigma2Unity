@@ -68,6 +68,20 @@ namespace SoobakFigma2Unity.Editor.Models
         [JsonProperty("componentId")] public string ComponentId;
         [JsonProperty("componentSetId")] public string ComponentSetId;
 
+        // INSTANCE node only: values supplied for the component's parameters.
+        // Keyed by "<propName>#<id>" (Figma's stable property identifier).
+        // Each value carries a Type (BOOLEAN, TEXT, INSTANCE_SWAP, VARIANT) and Value.
+        [JsonProperty("componentProperties")]
+        public Dictionary<string, FigmaComponentPropertyValue> ComponentProperties;
+
+        // Child of a COMPONENT/INSTANCE: maps the child's local property to the
+        // owning instance's componentProperty key. e.g. characters → "Label#1234:5"
+        // means this child's text comes from the instance's "Label" property.
+        // Recognised local keys today: "characters" (TEXT), "visible" (BOOLEAN),
+        // "mainComponent" (INSTANCE_SWAP).
+        [JsonProperty("componentPropertyReferences")]
+        public Dictionary<string, string> ComponentPropertyReferences;
+
         // Background (legacy, some files still use this)
         [JsonProperty("backgroundColor")] public FigmaColor BackgroundColor;
 

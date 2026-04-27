@@ -38,19 +38,32 @@ namespace SoobakFigma2Unity.Editor.Mapping
             string prefabName,
             ImportContext ctx,
             MergeMode mode,
-            ImportLogger logger)
+            ImportLogger logger,
+            string rootComponentId = null,
+            string explicitAssetPath = null)
         {
             if (newRoot == null) return null;
 
-            AssetFolderUtil.EnsureFolder(outputDir);
-            var name = SanitizeName(prefabName ?? newRoot.name);
-            var assetPath = Path.Combine(outputDir, $"{name}.prefab").Replace("\\", "/");
+            string assetPath;
+            if (!string.IsNullOrEmpty(explicitAssetPath))
+            {
+                AssetFolderUtil.EnsureFolder(Path.GetDirectoryName(explicitAssetPath).Replace("\\", "/"));
+                assetPath = explicitAssetPath;
+            }
+            else
+            {
+                AssetFolderUtil.EnsureFolder(outputDir);
+                var name = SanitizeName(prefabName ?? newRoot.name);
+                assetPath = Path.Combine(outputDir, $"{name}.prefab").Replace("\\", "/");
+            }
 
             bool exists = File.Exists(Path.GetFullPath(assetPath));
 
             // Whichever branch we take, the newly-built tree needs a fresh manifest so its
-            // identity records are stored when we save.
-            var attachedManifest = ManifestBuilder.AttachRootManifest(newRoot, ctx);
+            // identity records are stored when we save. ComponentExtractionPass passes the
+            // rootComponentId for prefabs extracted from a Figma COMPONENT so we can
+            // re-find them on subsequent imports even if the file gets renamed.
+            var attachedManifest = ManifestBuilder.AttachRootManifest(newRoot, ctx, rootComponentId);
             logger?.Info($"{assetPath}: manifest attached with {attachedManifest?.Entries.Count ?? 0} tracked GameObjects.");
 
             if (!exists || mode == MergeMode.FullReplace)

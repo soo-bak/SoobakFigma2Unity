@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using SoobakFigma2Unity.Editor.Color;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
@@ -94,14 +95,22 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 }
             }
 
-            // Recursively apply child overrides by matching names
+            // Recursively apply child overrides by matching names. Pass the INSTANCE's
+            // componentProperties down so child componentPropertyReferences can resolve
+            // (BOOLEAN → SetActive, TEXT → TMP.text). PrefabUtility.RecordPrefabInstance...
+            // is invoked at the end so Unity registers the changes as proper overrides
+            // on the PrefabInstance rather than leaving them as un-tracked edits.
             if (instanceNode.Children != null)
             {
-                ApplyChildOverrides(instance, instanceNode, ctx);
+                ApplyChildOverrides(instance, instanceNode, ctx, instanceNode.ComponentProperties);
             }
+
+            PrefabUtility.RecordPrefabInstancePropertyModifications(instance);
         }
 
-        private void ApplyChildOverrides(GameObject parentGo, FigmaNode parentNode, ImportContext ctx)
+        private void ApplyChildOverrides(
+            GameObject parentGo, FigmaNode parentNode, ImportContext ctx,
+            Dictionary<string, FigmaComponentPropertyValue> ownerProperties)
         {
             if (parentNode.Children == null) return;
 
@@ -113,7 +122,12 @@ namespace SoobakFigma2Unity.Editor.Prefabs
 
                 var childGo = childTransform.gameObject;
 
-                // Text overrides
+                // 1) componentProperty references — Figma's "Show Icon", "Label", etc.
+                //    The CHILD references a property on the OWNING INSTANCE; that's why
+                //    we pass ownerProperties from the outermost INSTANCE downward.
+                ApplyComponentPropertyReferences(childGo, childNode, ownerProperties);
+
+                // 2) Direct text overrides on TEXT nodes (when not driven by a TEXT property)
                 if (childNode.NodeType == FigmaNodeType.TEXT)
                 {
                     var tmp = childGo.GetComponent<TMPro.TextMeshProUGUI>();
@@ -136,7 +150,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                     }
                 }
 
-                // Image/fill overrides
+                // 3) Image/fill overrides
                 var image = childGo.GetComponent<Image>();
                 if (image != null && childNode.HasVisibleFills)
                 {
@@ -157,13 +171,54 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                     }
                 }
 
-                // Visibility override
+                // 4) Plain visibility (Figma's hide-this-layer toggle, distinct from a BOOLEAN
+                //    component property). A BOOLEAN already set this above; if both apply, the
+                //    later "false" wins which matches Figma's "false hides regardless" rule.
                 if (!childNode.Visible)
                     childGo.SetActive(false);
 
-                // Recurse
-                if (childNode.Children != null)
-                    ApplyChildOverrides(childGo, childNode, ctx);
+                // 5) Recurse — but skip stepping into nested INSTANCE children. Those are
+                //    their own PrefabInstances (linked in their own InstanceConverter pass)
+                //    and shouldn't have the outer instance's overrides bled into them.
+                if (childNode.NodeType != FigmaNodeType.INSTANCE && childNode.Children != null)
+                    ApplyChildOverrides(childGo, childNode, ctx, ownerProperties);
+            }
+        }
+
+        private static void ApplyComponentPropertyReferences(
+            GameObject childGo, FigmaNode childNode,
+            Dictionary<string, FigmaComponentPropertyValue> ownerProperties)
+        {
+            if (ownerProperties == null) return;
+            var refs = childNode.ComponentPropertyReferences;
+            if (refs == null || refs.Count == 0) return;
+
+            foreach (var pair in refs)
+            {
+                // pair.Key is the local property the child wants overridden ("visible",
+                // "characters", "mainComponent"). pair.Value is the "Name#Id" key into
+                // the owning INSTANCE's componentProperties dictionary.
+                if (!ownerProperties.TryGetValue(pair.Value, out var propValue) || propValue == null)
+                    continue;
+
+                switch (pair.Key)
+                {
+                    case "visible":
+                        if (propValue.Type == "BOOLEAN")
+                            childGo.SetActive(propValue.AsBool());
+                        break;
+                    case "characters":
+                        if (propValue.Type == "TEXT")
+                        {
+                            var tmp = childGo.GetComponent<TMPro.TextMeshProUGUI>();
+                            var text = propValue.AsString();
+                            if (tmp != null && text != null)
+                                tmp.text = text;
+                        }
+                        break;
+                    // case "mainComponent": INSTANCE_SWAP — v2; for now the prefab keeps
+                    // whatever component the master extraction baked in.
+                }
             }
         }
     }

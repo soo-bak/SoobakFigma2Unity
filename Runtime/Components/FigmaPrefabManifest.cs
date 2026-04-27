@@ -38,11 +38,27 @@ namespace SoobakFigma2Unity.Runtime
 
         [SerializeField] private List<Entry> entries = new();
 
+        [SerializeField, Tooltip(
+            "Figma componentId this prefab was extracted from (only set when the prefab " +
+            "represents a Figma COMPONENT). Used by ComponentExtractionPass on re-import to " +
+            "match a fresh Figma component to its existing prefab even when the file name has " +
+            "since been changed by hand.")]
+        private string rootComponentId;
+
         // Lazy index: Transform instance ID → entries slot. Rebuilt on demand.
         [NonSerialized] private Dictionary<int, int> _indexByInstanceId;
         [NonSerialized] private bool _indexDirty = true;
 
         public IReadOnlyList<Entry> Entries => entries;
+
+        /// <summary>The Figma componentId this prefab was extracted from, or null/empty when
+        /// the prefab is a regular screen rather than an extracted component.</summary>
+        public string RootComponentId => rootComponentId;
+
+        public void SetRootComponentId(string componentId)
+        {
+            rootComponentId = componentId;
+        }
 
         // ─── Query ──────────────────────────────────────
 

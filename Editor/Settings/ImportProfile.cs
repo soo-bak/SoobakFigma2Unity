@@ -65,5 +65,21 @@ namespace SoobakFigma2Unity.Editor.Settings
         public string PrefabOutputPath = "Assets/UI/Prefabs";
         public string ScreenOutputPath = "Assets/UI/Screens";
         public string ImageOutputPath = "Assets/UI/Images";
+
+        // Component auto-extraction (zero-config Figma component → Unity prefab)
+        // When enabled, the import pre-pass walks the entire imported tree, builds
+        // a dependency graph of every Figma COMPONENT/INSTANCE, and ensures each
+        // one has a .prefab file in ComponentOutputPath before the main convert
+        // runs. The screen prefab then ends up referencing those prefabs as
+        // PrefabInstances rather than inlining everything.
+        public string ComponentOutputPath = "Assets/UI/Components";
+        public bool ExtractFigmaComponentsAsPrefabs = true;
+
+        // Phase 2 (opt-in): structural duplicate detection — promote subtrees that
+        // repeat 2+ times in a frame even when the designer didn't mark them as
+        // Figma components. Off by default because false-positives (visually
+        // similar but semantically distinct subtrees getting collapsed) are hard
+        // to debug.
+        public bool DetectStructuralDuplicates = false;
     }
 }

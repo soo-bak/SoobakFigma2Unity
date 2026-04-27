@@ -29,7 +29,7 @@ namespace SoobakFigma2Unity.Editor.Mapping
         /// pre-rebuild entries (so matched-and-kept Transforms keep their nodeId even though
         /// they aren't in ctx.NodeIdentities).
         /// </summary>
-        public static FigmaPrefabManifest AttachRootManifest(GameObject root, ImportContext ctx)
+        public static FigmaPrefabManifest AttachRootManifest(GameObject root, ImportContext ctx, string rootComponentId = null)
         {
             if (root == null || ctx == null)
                 return null;
@@ -52,6 +52,14 @@ namespace SoobakFigma2Unity.Editor.Mapping
             CollectEntries(root.transform, ctx, prior, entries);
 
             manifest.Rebuild(entries, preserveUserOverrides: true);
+
+            // ComponentExtractionPass passes the Figma componentId for prefabs that represent
+            // a single Figma COMPONENT. Preserve any pre-existing root id when the caller
+            // doesn't supply one — this keeps prefabs that were extracted in an earlier import
+            // round-tripping their identity even when the second import produced no fresh value.
+            if (!string.IsNullOrEmpty(rootComponentId))
+                manifest.SetRootComponentId(rootComponentId);
+
             return manifest;
         }
 

@@ -106,6 +106,35 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     ctx.FillImagePaths = await downloader.DownloadImageFillsAsync(
                         fileKey, ctx.ImageFillRefs, GetTempImageDir(), ct);
 
+                // 3.5. Build composite backgrounds for "decorative + text" containers.
+                // Walks each container we marked during CollectImageRequirements, gathers
+                // the per-leaf PNGs that just landed, and alpha-blends them into a single
+                // container-sized PNG saved next to the others. Registers the composite
+                // path under the container's node id so ImportAllImages picks it up the
+                // same way it picks up Figma-rendered nodes — and the convert path will
+                // see ctx.NodeSprites[containerId] populated.
+                if (ctx.CompositeContainerIds.Count > 0)
+                {
+                    int compositeOk = 0;
+                    foreach (var containerId in ctx.CompositeContainerIds)
+                    {
+                        if (!ctx.NodeIndex.TryGetValue(containerId, out var container)) continue;
+                        var leaves = new List<FigmaNode>();
+                        CollectDecorativeLeaves(container, leaves);
+                        if (leaves.Count == 0) continue;
+
+                        var compositePath = CompositeBuilder.Compose(
+                            container, leaves, ctx.NodeImagePaths,
+                            profile.ImageScale, GetTempImageDir(), _logger);
+                        if (!string.IsNullOrEmpty(compositePath))
+                        {
+                            ctx.NodeImagePaths[containerId] = compositePath;
+                            compositeOk++;
+                        }
+                    }
+                    _logger.Info($"Composited {compositeOk} of {ctx.CompositeContainerIds.Count} mixed text+decorative containers.");
+                }
+
                 // 4-6. Shared conversion
                 progress.Step("Importing images...");
                 ImportAllImages(ctx, profile);
@@ -302,9 +331,20 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     childGo.GetComponent<UnityEngine.UI.Image>().sprite != null &&
                     !ctx.NodeSprites.ContainsKey(childNode.Id);
 
-                if (childNode.HasChildren && childNode.NodeType != FigmaNodeType.TEXT
+                bool childIsComposite = ctx.CompositeContainerIds.Contains(childNode.Id);
+                if (childIsComposite)
+                {
+                    // Composite container child: the Image already holds the CPU-composite
+                    // of every decorative descendant. Skip the normal recursion (it would
+                    // re-render those decoratives on top of the composite) and instead add
+                    // editable TMP overlays for each TEXT descendant.
+                    AddTextOverlays(childNode, childGo, ctx, profile);
+                }
+                else if (childNode.HasChildren && childNode.NodeType != FigmaNodeType.TEXT
                     && !isRasterized && !isMaskFrameConsumedChild)
+                {
                     ConvertChildren(childNode, childGo, ctx, profile);
+                }
 
                 // Wrapper FRAME/INSTANCE with a non-trivial blend mode but no own
                 // Image: cascade the blend approximation onto descendants. (Image-bearing
@@ -438,8 +478,65 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             ApplyFrameProperties(go, node, ctx);
             if (profile.ConvertAutoLayout && node.IsAutoLayout) AutoLayoutMapper.Apply(go, node);
             bool isRasterized = ctx.NodeSprites.ContainsKey(node.Id);
-            if (node.HasChildren && !isRasterized) ConvertChildren(node, go, ctx, profile);
+            bool isComposite = ctx.CompositeContainerIds.Contains(node.Id);
+
+            if (isComposite)
+            {
+                // Composite container: the Image is the CPU-composited decoratives. We
+                // must NOT walk decorative children (they're baked into the composite),
+                // but we DO need to overlay each TEXT descendant as an editable TMP so
+                // the user can change the string at runtime. Walk text-only.
+                AddTextOverlays(node, go, ctx, profile);
+            }
+            else if (node.HasChildren && !isRasterized)
+            {
+                ConvertChildren(node, go, ctx, profile);
+            }
             return go;
+        }
+
+        // Creates a TextMeshProUGUI overlay for every TEXT descendant of a composite
+        // container. Each TMP is parented directly under the container's GO and positioned
+        // by Figma coords relative to the container — intermediate frames in the Figma
+        // hierarchy are flattened away because their decorative content is already baked
+        // into the composite below. The standard TextConverter handles font / colour /
+        // alignment.
+        private void AddTextOverlays(FigmaNode container, GameObject containerGo, ImportContext ctx, ImportProfile profile)
+        {
+            var textNodes = new List<FigmaNode>();
+            CollectTextDescendants(container, textNodes);
+            if (textNodes.Count == 0) return;
+
+            var textConverter = _registry.GetConverter(textNodes[0]);
+            if (textConverter == null) return;
+
+            foreach (var textNode in textNodes)
+            {
+                if (NodeConverterRegistry.ShouldSkip(textNode)) continue;
+                GameObject textGo;
+                try { textGo = textConverter.Convert(textNode, containerGo, ctx); }
+                catch (System.Exception e)
+                {
+                    ctx.Logger.Error($"Composite text overlay convert failed for '{textNode.Name}': {e.Message}");
+                    continue;
+                }
+                if (textGo == null) continue;
+
+                var rt = textGo.GetComponent<RectTransform>();
+                if (rt == null) continue;
+
+                // Position the TMP relative to the container, top-left anchored. Avoids
+                // the SCALE-anchor pitfall that produced wrong-quadrant text drift in the
+                // structural mode — for a baked composite the container size is fixed,
+                // so a fixed-pixel position is the right model anyway.
+                var relPos = SizeCalculator.GetRelativePosition(textNode, container);
+                var textSize = SizeCalculator.GetSize(textNode);
+                rt.pivot = new Vector2(0.5f, 0.5f);
+                rt.anchorMin = new Vector2(0f, 1f);
+                rt.anchorMax = new Vector2(0f, 1f);
+                rt.offsetMin = new Vector2(relPos.x, -(relPos.y + textSize.y));
+                rt.offsetMax = new Vector2(relPos.x + textSize.x, -relPos.y);
+            }
         }
 
         // ─── Image import ───────────────────────────────
@@ -521,17 +618,23 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             // Atomic-visual-group rasterisation: a FRAME / GROUP / INSTANCE whose
             // entire descendant tree is purely decorative (no TEXT nodes, no nested
             // INSTANCEs — only rectangles, vectors, ellipses, etc.) ships as one PNG
-            // for that whole subtree. Folding decorative groups eliminates the
-            // per-rectangle UGUI compositing drift while keeping any text or nested
-            // instance further up the tree as their own editable Unity components.
-            //
-            // Bypasses the container-with-children rasterisation guard for these
-            // groups specifically. The guard still fires for containers that DO
-            // have text or nested instances inside, so the screen frame doesn't
-            // smear back into one image.
+            // for that whole subtree.
             bool atomicVisualGroup = ctx.Profile != null
                 && ctx.Profile.RasterizeAtomicVisualGroups
                 && IsAtomicVisualGroup(node);
+
+            // Composite container: mixed text + decoratives, no nested INSTANCE. We do NOT
+            // bake the container as one PNG (that would include the text and produce a
+            // baked-text artefact behind the TMP overlay). Instead let each decorative
+            // leaf get rasterised individually (via the recursive walk), then later we'll
+            // CPU-composite those leaves into one container-sized background PNG and
+            // overlay each TEXT descendant as an editable TMP. Just record the container
+            // id here; the actual compositing runs after image download lands.
+            bool compositeContainer = ctx.Profile != null
+                && ctx.Profile.RasterizeAtomicVisualGroups
+                && IsCompositeContainer(node);
+            if (compositeContainer)
+                ctx.CompositeContainerIds.Add(node.Id);
 
             bool needsRaster = atomicVisualGroup || NodeConverterRegistry.NeedsRasterization(node);
             if (needsRaster)
@@ -568,14 +671,8 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         // An "atomic visual group" is a container whose entire descendant tree is purely
         // decorative — only RECTANGLE / VECTOR / ELLIPSE / STAR / LINE / REGULAR_POLYGON /
         // BOOLEAN_OPERATION primitives. No TEXT (we want text editable), no nested INSTANCE
-        // (we want its prefab linkage preserved). Such groups can ship as one PNG without
-        // sacrificing anything the user wants to edit, and the single PNG sidesteps the
-        // per-rectangle UGUI compositing drift that produces "wavy → straight" / clipped-
-        // stroke artefacts.
-        //
-        // The node itself must be a container that can hold children (FRAME / GROUP /
-        // INSTANCE). COMPONENT is excluded — designer-authored components mean structural
-        // intent that we want to honour by keeping the inner layout walkable.
+        // (we want its prefab linkage preserved). Such groups ship as one PNG of the whole
+        // container; the descendant tree isn't walked at all.
         private static bool IsAtomicVisualGroup(FigmaNode node)
         {
             if (node == null || !node.HasChildren) return false;
@@ -598,6 +695,104 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 foreach (var child in node.Children)
                     if (HasTextOrInstanceDescendant(child)) return true;
             return false;
+        }
+
+        // A "composite container" is the mixed case: a FRAME / GROUP / INSTANCE that holds
+        // BOTH text descendants AND decorative descendants (no nested INSTANCE). We can't
+        // bake the whole thing as one PNG because Figma's render would include the text
+        // and the user explicitly forbids baked-text bleeding through any TMP overlay.
+        //
+        // Instead the pipeline:
+        //   1. Lets each decorative leaf get rasterised individually (via the normal walk).
+        //   2. After the downloads land, CompositeBuilder alpha-blends the decorative
+        //      leaves into one container-sized PNG at their relative positions — text
+        //      not included.
+        //   3. ConvertNodeToGameObject for the container places that single Image, then
+        //      walks only the TEXT descendants and creates them as editable TMP children.
+        //
+        // The visible result: pixel-accurate decorative composite from Figma, text
+        // editable, zero risk of baked-text artefact behind the TMP.
+        private static bool IsCompositeContainer(FigmaNode node)
+        {
+            if (node == null || !node.HasChildren) return false;
+            var t = node.NodeType;
+            if (t != FigmaNodeType.FRAME && t != FigmaNodeType.GROUP && t != FigmaNodeType.INSTANCE)
+                return false;
+            bool hasText = false;
+            bool hasDecorative = false;
+            foreach (var child in node.Children)
+            {
+                if (HasInstanceDescendantInternal(child)) return false;
+                if (HasTextDescendantInternal(child)) hasText = true;
+                if (HasDecorativeDescendantInternal(child)) hasDecorative = true;
+                if (hasText && hasDecorative) break;
+            }
+            return hasText && hasDecorative;
+        }
+
+        private static bool HasInstanceDescendantInternal(FigmaNode node)
+        {
+            if (node == null) return false;
+            if (node.NodeType == FigmaNodeType.INSTANCE) return true;
+            if (node.Children != null)
+                foreach (var c in node.Children)
+                    if (HasInstanceDescendantInternal(c)) return true;
+            return false;
+        }
+
+        private static bool HasTextDescendantInternal(FigmaNode node)
+        {
+            if (node == null) return false;
+            if (node.NodeType == FigmaNodeType.TEXT) return true;
+            if (node.Children != null)
+                foreach (var c in node.Children)
+                    if (HasTextDescendantInternal(c)) return true;
+            return false;
+        }
+
+        private static bool HasDecorativeDescendantInternal(FigmaNode node)
+        {
+            if (node == null) return false;
+            var t = node.NodeType;
+            if (t == FigmaNodeType.TEXT || t == FigmaNodeType.INSTANCE) return false;
+            if (NodeConverterRegistry.NeedsRasterization(node)) return true;
+            if (node.Children != null)
+                foreach (var c in node.Children)
+                    if (HasDecorativeDescendantInternal(c)) return true;
+            return false;
+        }
+
+        // Decorative leaves of a composite container — every node that gets its own PNG
+        // export and contributes a layer to the CPU composite. Walks depth-first so the
+        // caller can process them in Figma's document order (= z-order, bottom first).
+        internal static void CollectDecorativeLeaves(FigmaNode node, System.Collections.Generic.List<FigmaNode> output)
+        {
+            if (node == null) return;
+            var t = node.NodeType;
+            if (t == FigmaNodeType.TEXT || t == FigmaNodeType.INSTANCE) return;
+            if (NodeConverterRegistry.NeedsRasterization(node) && node.AbsoluteBoundingBox != null)
+            {
+                output.Add(node);
+                return; // node is rasterised as one unit; don't dive deeper
+            }
+            if (node.Children != null)
+                foreach (var c in node.Children)
+                    CollectDecorativeLeaves(c, output);
+        }
+
+        // Text descendants of a composite container — each becomes a TextMeshProUGUI
+        // overlaid on the composite Image at the text's relative position to the container.
+        internal static void CollectTextDescendants(FigmaNode node, System.Collections.Generic.List<FigmaNode> output)
+        {
+            if (node == null) return;
+            if (node.NodeType == FigmaNodeType.TEXT)
+            {
+                output.Add(node);
+                return;
+            }
+            if (node.Children != null)
+                foreach (var child in node.Children)
+                    CollectTextDescendants(child, output);
         }
 
         // Decides whether Figma should rasterize this node at its absoluteBoundingBox or

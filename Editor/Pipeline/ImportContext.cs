@@ -52,16 +52,6 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         /// </summary>
         public Dictionary<string, RasterBoundsMode> NodeRasterBoundsModes { get; set; } = new Dictionary<string, RasterBoundsMode>();
 
-        /// <summary>
-        /// Container nodes whose decorative descendants get CPU-composited into a single
-        /// background PNG, with TEXT descendants overlaid as editable TMP children. Set
-        /// during CollectImageRequirements; consumed in ImportAllImages and the convert
-        /// path. Membership means "ApplyFrameProperties should treat ctx.NodeSprites[id]
-        /// as an opaque background and the convert path should not walk decorative
-        /// children — only TEXT descendants get overlay TMP components".
-        /// </summary>
-        public HashSet<string> CompositeContainerIds { get; set; } = new HashSet<string>();
-
         /// <summary>All image fill refs that need downloading.</summary>
         public HashSet<string> ImageFillRefs { get; set; } = new HashSet<string>();
 

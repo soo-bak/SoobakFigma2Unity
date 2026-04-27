@@ -45,6 +45,13 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         /// <summary>All nodes that need rasterized images (collected before download).</summary>
         public HashSet<string> NodesToRasterize { get; set; } = new HashSet<string>();
 
+        /// <summary>
+        /// Per-node export mode. Nodes whose stroke or effects extend past the bounding
+        /// box ship their PNG with use_absolute_bounds=false so the outline isn't clipped.
+        /// All other nodes default to AbsoluteBounds (sprite size = RectTransform size).
+        /// </summary>
+        public Dictionary<string, RasterBoundsMode> NodeRasterBoundsModes { get; set; } = new Dictionary<string, RasterBoundsMode>();
+
         /// <summary>All image fill refs that need downloading.</summary>
         public HashSet<string> ImageFillRefs { get; set; } = new HashSet<string>();
 
@@ -57,6 +64,25 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         /// prefab root just before SaveAsPrefabAsset.
         /// </summary>
         public Dictionary<Transform, NodeIdentityRecord> NodeIdentities { get; set; } = new Dictionary<Transform, NodeIdentityRecord>();
+
+        /// <summary>
+        /// Which bounds Figma should use when rasterizing a node:
+        ///   • <see cref="AbsoluteBounds"/> — exports at the absoluteBoundingBox extent.
+        ///     PNG dimensions match the RectTransform exactly, but any stroke that lives
+        ///     outside the path (strokeAlign = OUTSIDE/CENTER) is clipped, as are drop
+        ///     shadows that bleed past the layout box. Default for the typical node.
+        ///   • <see cref="RenderBounds"/> — passes use_absolute_bounds=false so Figma
+        ///     ships the actual rendered area (path + stroke + effects). Sprite ends up
+        ///     slightly larger than the RectTransform; UGUI Image squishes it back to
+        ///     fit. The squish is invisible at typical 1–4 px stroke widths but the
+        ///     outline survives — exactly the trade-off the user picked over "outline
+        ///     just gone".
+        /// </summary>
+        public enum RasterBoundsMode
+        {
+            AbsoluteBounds = 0,
+            RenderBounds   = 1,
+        }
 
         public readonly struct NodeIdentityRecord
         {

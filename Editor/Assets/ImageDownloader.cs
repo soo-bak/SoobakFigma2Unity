@@ -25,15 +25,15 @@ namespace SoobakFigma2Unity.Editor.Assets
 
         public async Task<Dictionary<string, string>> DownloadNodeImagesAsync(
             string fileKey, IReadOnlyList<string> nodeIds, string outputDir,
-            float scale = 2f, CancellationToken ct = default)
+            float scale = 2f, bool useAbsoluteBounds = true, CancellationToken ct = default)
         {
             var result = new ConcurrentDictionary<string, string>();
             if (nodeIds.Count == 0) return new Dictionary<string, string>(result);
 
             Directory.CreateDirectory(outputDir);
 
-            _logger.Info($"Requesting image URLs for {nodeIds.Count} nodes...");
-            var imageUrls = await _api.GetImageUrlsAsync(fileKey, nodeIds, scale, "png", ct);
+            _logger.Info($"Requesting image URLs for {nodeIds.Count} nodes (use_absolute_bounds={useAbsoluteBounds})...");
+            var imageUrls = await _api.GetImageUrlsAsync(fileKey, nodeIds, scale, "png", useAbsoluteBounds, ct);
 
             var validUrls = imageUrls.Where(kv => !string.IsNullOrEmpty(kv.Value)).ToList();
             int total = validUrls.Count;

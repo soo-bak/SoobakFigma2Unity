@@ -66,12 +66,42 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     CollectImageRequirements(frame, ctx);
                 _logger.Info($"Nodes to rasterize: {ctx.NodesToRasterize.Count}, Image fills: {ctx.ImageFillRefs.Count}");
 
-                // 3. Download images (parallel)
+                // 3. Download images (parallel). Split by RasterBoundsMode so outside-stroke /
+                // outward-effect nodes ship with use_absolute_bounds=false (their full render
+                // area, outline preserved). Most nodes default to AbsoluteBounds and ride the
+                // happy path where sprite size matches the RectTransform exactly.
                 progress.Step($"Downloading {ctx.NodesToRasterize.Count} images...");
                 var downloader = new ImageDownloader(api, _logger);
                 if (ctx.NodesToRasterize.Count > 0)
-                    ctx.NodeImagePaths = await downloader.DownloadNodeImagesAsync(
-                        fileKey, ctx.NodesToRasterize.ToList(), GetTempImageDir(), profile.ImageScale, ct);
+                {
+                    var allIds = ctx.NodesToRasterize.ToList();
+                    var absoluteIds = allIds
+                        .Where(id => !ctx.NodeRasterBoundsModes.TryGetValue(id, out var m)
+                                     || m == ImportContext.RasterBoundsMode.AbsoluteBounds)
+                        .ToList();
+                    var renderIds = allIds
+                        .Where(id => ctx.NodeRasterBoundsModes.TryGetValue(id, out var m)
+                                     && m == ImportContext.RasterBoundsMode.RenderBounds)
+                        .ToList();
+
+                    var imagePaths = new Dictionary<string, string>();
+                    if (absoluteIds.Count > 0)
+                    {
+                        var paths = await downloader.DownloadNodeImagesAsync(
+                            fileKey, absoluteIds, GetTempImageDir(), profile.ImageScale,
+                            useAbsoluteBounds: true, ct);
+                        foreach (var kv in paths) imagePaths[kv.Key] = kv.Value;
+                    }
+                    if (renderIds.Count > 0)
+                    {
+                        _logger.Info($"Re-fetching {renderIds.Count} stroke/effect nodes with use_absolute_bounds=false to keep their outline.");
+                        var paths = await downloader.DownloadNodeImagesAsync(
+                            fileKey, renderIds, GetTempImageDir(), profile.ImageScale,
+                            useAbsoluteBounds: false, ct);
+                        foreach (var kv in paths) imagePaths[kv.Key] = kv.Value;
+                    }
+                    ctx.NodeImagePaths = imagePaths;
+                }
                 if (ctx.ImageFillRefs.Count > 0)
                     ctx.FillImagePaths = await downloader.DownloadImageFillsAsync(
                         fileKey, ctx.ImageFillRefs, GetTempImageDir(), ct);
@@ -432,6 +462,17 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 ctx.NodeSprites[kv.Key] = s;
                 if (nineSlice != null && ctx.NodeIndex.TryGetValue(kv.Key, out var node))
                 {
+                    // 9-slice border math is in pixels of the EXPORTED sprite, derived from
+                    // node dimensions × scale. That equation only holds when the sprite size
+                    // equals the bounding box — i.e. AbsoluteBounds export. RenderBounds
+                    // exports are slightly larger (stroke / shadow padding) and the borders
+                    // would land in the wrong place, breaking the slice. Skip 9-slice for
+                    // those nodes — they get drawn as Image.Type.Simple from the FullRect
+                    // sprite, which is fine for a stroked rectangle that doesn't tile.
+                    if (ctx.NodeRasterBoundsModes.TryGetValue(kv.Key, out var mode)
+                        && mode == ImportContext.RasterBoundsMode.RenderBounds)
+                        continue;
+
                     var borders = nineSlice.DetectBorders(node);
                     if (borders != Vector4.zero)
                     {
@@ -457,6 +498,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (needsRaster)
             {
                 ctx.NodesToRasterize.Add(node.Id);
+                ctx.NodeRasterBoundsModes[node.Id] = ChooseRasterBoundsMode(node);
                 // Node will be rasterized as a whole — don't also download the raw fill image
                 // (raw fill is the uncropped sprite sheet, rasterization gives the correct crop)
             }
@@ -478,6 +520,41 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             !n.HasVisibleFills &&
             (n.Effects == null || n.Effects.Count == 0) &&
             !NodeConverterRegistry.IsMaskContainer(n); // preserve mask containers
+
+        // Decides whether Figma should rasterize this node at its absoluteBoundingBox or
+        // at its actual render area. The default — AbsoluteBounds — keeps sprite size
+        // matching the RectTransform exactly, which is what we want for the typical node.
+        // The escape hatch fires when the node's visible footprint extends past the layout
+        // box: an outside / center stroke, or a drop shadow / outer-glow effect that would
+        // otherwise get clipped flush to the path.
+        private static ImportContext.RasterBoundsMode ChooseRasterBoundsMode(FigmaNode node)
+        {
+            if (node == null) return ImportContext.RasterBoundsMode.AbsoluteBounds;
+
+            // Stroke that paints outside the path. Figma's default is INSIDE; OUTSIDE and
+            // CENTER both bleed past the bounding box and get clipped at use_absolute_bounds=true.
+            bool hasOutsideStroke = node.StrokeWeight > 0f
+                && node.Strokes != null
+                && node.Strokes.Exists(s => s.Visible && s.Opacity > 0f)
+                && (node.StrokeAlign == "OUTSIDE" || node.StrokeAlign == "CENTER");
+
+            // Drop shadow / outer glow / layer blur expand the rendered area beyond the path.
+            // Inner shadow / inner glow stay inside, so we don't trip on those.
+            bool hasOutwardEffect = false;
+            if (node.Effects != null)
+            {
+                foreach (var fx in node.Effects)
+                {
+                    if (fx == null || !fx.Visible) continue;
+                    if (fx.Type == "DROP_SHADOW" || fx.Type == "LAYER_BLUR")
+                    { hasOutwardEffect = true; break; }
+                }
+            }
+
+            return hasOutsideStroke || hasOutwardEffect
+                ? ImportContext.RasterBoundsMode.RenderBounds
+                : ImportContext.RasterBoundsMode.AbsoluteBounds;
+        }
 
         private static string GetTempImageDir()
         {

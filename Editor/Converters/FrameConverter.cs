@@ -106,7 +106,17 @@ namespace SoobakFigma2Unity.Editor.Converters
         private GameObject CreateGameObject(FigmaNode node, GameObject parent)
         {
             var go = new GameObject(node.Name);
-            go.AddComponent<RectTransform>();
+            var rt = go.AddComponent<RectTransform>();
+
+            // Initial size from Figma's bounding box. ConvertChildren applies the actual
+            // anchor / position layout afterwards (AutoLayoutMapper or AnchorMapper), but
+            // those paths assume the child already has a sane sizeDelta to anchor against.
+            // Without this seed value the child is born at (0,0,0,0) in the RectTransform,
+            // and any downstream layout that fails or no-ops leaves the GameObject as a
+            // zero-sized point — observed on KeyHint inside the primary-XL button variant,
+            // which then collapsed every stretch-anchored descendant (highlight, etc.) to
+            // zero too.
+            rt.sizeDelta = SizeCalculator.GetSize(node);
 
             if (parent != null)
                 go.transform.SetParent(parent.transform, false);

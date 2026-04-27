@@ -65,6 +65,28 @@ namespace SoobakFigma2Unity.Editor.Converters
                 t == FigmaNodeType.BOOLEAN_OPERATION)
                 return true;
 
+            // Containers with visible children should NEVER be rasterized as a whole.
+            // Figma's /v1/images endpoint renders the full visual of the requested node —
+            // for a FRAME / GROUP / COMPONENT / INSTANCE / SECTION that means every visible
+            // child gets baked into the PNG. We then ALSO convert each child into a separate
+            // GameObject, so the screen ends up with the entire frame painted as a flat
+            // image AND the child structure layered on top — every text/icon/button rendered
+            // twice, the prefab structure becomes meaningless because everything is hidden
+            // behind the rasterized layer.
+            //
+            // The cost of this guard: a frame with a gradient or image background loses that
+            // background (we can't separate it from the children in a single PNG). For UI
+            // designs the children carry the actual content — backgrounds are usually a
+            // solid colour anyway and SolidColorOptimizer handles those without raster.
+            bool isContainer = t == FigmaNodeType.FRAME
+                || t == FigmaNodeType.GROUP
+                || t == FigmaNodeType.COMPONENT
+                || t == FigmaNodeType.COMPONENT_SET
+                || t == FigmaNodeType.INSTANCE
+                || t == FigmaNodeType.SECTION;
+            if (isContainer && node.HasChildren)
+                return false;
+
             if (node.Fills != null)
             {
                 foreach (var fill in node.Fills)

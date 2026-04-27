@@ -71,16 +71,23 @@ namespace SoobakFigma2Unity.Editor.Converters
                 var mask = go.AddComponent<Mask>();
                 mask.showMaskGraphic = false; // mask shape is invisible; only its alpha clips children
             }
-            // Clips content → Mask (clips own children to this frame's bounds)
+            // Clips content → mask the frame's bounds. If ApplyFills already produced an
+            // Image (rasterized bg / solid colour / image fill), pair it with a UGUI Mask
+            // so children clip to the visible shape. Otherwise fall back to RectMask2D —
+            // adding an empty white Image just to host a Mask leaves the prefab with a
+            // bare Image that has m_Sprite: {fileID: 0}, which shows up in the inspector
+            // as an unintended placeholder and confuses anyone reading the prefab tree.
             else if (node.ClipsContent)
             {
                 var image = go.GetComponent<Image>();
-                if (image == null)
+                if (image != null)
                 {
-                    image = go.AddComponent<Image>();
-                    image.color = UnityEngine.Color.white;
+                    go.AddComponent<Mask>().showMaskGraphic = image.sprite != null;
                 }
-                go.AddComponent<Mask>().showMaskGraphic = image.sprite != null;
+                else
+                {
+                    go.AddComponent<RectMask2D>();
+                }
             }
 
             // Opacity. Skip when ApplyFills picked a rasterized sprite (NodeSprites): that

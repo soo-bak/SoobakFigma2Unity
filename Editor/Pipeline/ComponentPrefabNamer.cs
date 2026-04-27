@@ -36,16 +36,41 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             return $"{outputDir}/{sanitized}_{shortId}.prefab";
         }
 
-        // Strip characters Unity / Windows reject in file names. Mirrors the rule
-        // PrefabBuilder uses elsewhere so screen and component naming stay consistent.
+        // Strip characters Unity / Windows reject in file names AND the Figma variant-
+        // syntax characters that read as noise in a Unity Project window.
+        //
+        // Figma's variant component names look like "style=primary, size=XL, State=Default"
+        // (key=value pairs, comma-separated). Saved as-is the prefab file ends up named
+        // `style=primary, size=XL, State=Default.prefab` — visually unparseable in the
+        // Project view and prone to collisions when only one property differs. We strip
+        // any "<key>=" prefix from each comma-segment, leaving the values joined by
+        // underscores: e.g. "primary_XL_Default". Designer-typed component names without
+        // "=" pass through unchanged so we don't over-mangle conventional names.
         private static string SanitizeFileName(string name)
         {
             if (string.IsNullOrEmpty(name)) return "Component";
+
+            // Variant-style flattening: "k=v, k=v" → "v_v".
+            if (name.IndexOf('=') >= 0)
+            {
+                var parts = name.Split(',');
+                var values = new System.Collections.Generic.List<string>(parts.Length);
+                foreach (var part in parts)
+                {
+                    var eq = part.IndexOf('=');
+                    var v = (eq >= 0 ? part.Substring(eq + 1) : part).Trim();
+                    if (!string.IsNullOrEmpty(v)) values.Add(v);
+                }
+                if (values.Count > 0)
+                    name = string.Join("_", values);
+            }
+
             var sb = new StringBuilder(name.Length);
             foreach (var ch in name)
             {
                 bool ok = ch != '/' && ch != '\\' && ch != ':' && ch != '*' && ch != '?'
-                          && ch != '"' && ch != '<' && ch != '>' && ch != '|';
+                          && ch != '"' && ch != '<' && ch != '>' && ch != '|'
+                          && ch != '=' && ch != ',';
                 sb.Append(ok ? ch : '_');
             }
             var s = sb.ToString().Trim();

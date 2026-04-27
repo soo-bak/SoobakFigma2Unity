@@ -75,16 +75,21 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     continue; // PrefabVariantBuilder already produced this one.
 
                 var master = inv.ComponentMasters.TryGetValue(componentId, out var mNode) ? mNode : null;
-                bool fromFallback = false;
                 if (master == null)
                 {
-                    // External library component — first INSTANCE is our least-bad master.
-                    inv.FirstInstanceFallback.TryGetValue(componentId, out master);
-                    fromFallback = true;
-                }
-                if (master == null)
-                {
-                    logger?.Warn($"Component {componentId}: neither a master node nor an INSTANCE was found in the import tree, skipping.");
+                    // External library component — the master COMPONENT lives in another
+                    // Figma file and isn't in our imported subtree. Earlier we'd grab the
+                    // first INSTANCE's tree as a fallback "master" and run convertFunc on
+                    // it, but the INSTANCE's tree carries that specific instance's overrides
+                    // AND whatever sibling context it happens to sit in (we observed
+                    // bg_slice_btn_primary_xl coming out with bg_slice_button_secondary_xl
+                    // as its only child because the first primary instance was nested next
+                    // to a secondary instance in the import tree). Producing a wrong prefab
+                    // is worse than producing none — InstanceConverter falls through to
+                    // inline conversion which at least renders the visible content via the
+                    // raw Figma exports.
+                    inv.ComponentNames.TryGetValue(componentId, out var fallbackName);
+                    logger?.Warn($"Component {componentId}{(string.IsNullOrEmpty(fallbackName) ? "" : $" ({fallbackName})")}: master not in import tree (external library component); skipping auto-extract — the screen prefab will inline this instance instead. Add an explicit Component Map entry to override.");
                     continue;
                 }
 
@@ -105,10 +110,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     {
                         ctx.GeneratedPrefabs[componentId] = savedPath;
                         registerSavedPath?.Invoke(savedPath);
-                        if (fromFallback)
-                            logger?.Warn($"{displayName}: extracted from first INSTANCE (master not in import tree, likely an external library component) — fidelity may differ from the library definition.");
-                        else
-                            logger?.Success($"Component prefab: {savedPath}");
+                        logger?.Success($"Component prefab: {savedPath}");
                     }
                 }
                 finally

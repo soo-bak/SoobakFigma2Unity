@@ -172,6 +172,16 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             rootRt.anchorMin = new Vector2(0.5f, 0.5f);
             rootRt.anchorMax = new Vector2(0.5f, 0.5f);
 
+            // Identity for the root GameObject so ManifestBuilder records an entry for it,
+            // and SmartMerge can match the existing prefab's root → existing root → run
+            // ComponentMerger.SyncComponents on it. Without this, the root is anonymous in
+            // ctx.NodeIdentities; the existing manifest still carries the root entry by
+            // Transform reference, but matching breaks if the existing entry is missing —
+            // and any leftover Figma-managed components on the root (e.g. a stale Image
+            // from a pre-container-guard import) never get cleaned up.
+            ctx.NodeIdentities[rootGo.transform] =
+                new ImportContext.NodeIdentityRecord(frameNode.Id, frameNode.ComponentId);
+
             ApplyFrameProperties(rootGo, frameNode, ctx);
 
             if (profile.ConvertAutoLayout && frameNode.IsAutoLayout)
@@ -375,10 +385,14 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             }
             else if (node.ClipsContent)
             {
-                var img = go.GetComponent<UnityEngine.UI.Image>()
-                    ?? go.AddComponent<UnityEngine.UI.Image>();
-                if (img.sprite == null) img.color = UnityEngine.Color.white;
-                go.AddComponent<UnityEngine.UI.Mask>().showMaskGraphic = img.sprite != null;
+                // See FrameConverter for the same rule: if there's a real Image to mask
+                // against, use UGUI Mask. Otherwise fall back to RectMask2D so we don't
+                // leave a placeholder Image with no sprite assigned in the saved prefab.
+                var img = go.GetComponent<UnityEngine.UI.Image>();
+                if (img != null)
+                    go.AddComponent<UnityEngine.UI.Mask>().showMaskGraphic = img.sprite != null;
+                else
+                    go.AddComponent<UnityEngine.UI.RectMask2D>();
             }
             // Skip CanvasGroup when a rasterized sprite is the visual — the PNG already
             // has node.opacity baked into its alpha channel, so applying it again here

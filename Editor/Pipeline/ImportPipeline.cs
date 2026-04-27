@@ -585,6 +585,18 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             foreach (var child in node.Children)
                 if (HasTextOrInstanceDescendant(child))
                     return false;
+
+            // Atomic rasterisation exports the wrapper at its absoluteBoundingBox. If a
+            // descendant draws outside that box (e.g. a small INSTANCE wrapper containing
+            // an ellipse positioned past the wrapper's edge, or a child intentionally
+            // larger than its parent frame), Figma silently clips the overflow — the
+            // resulting sprite is the wrong shape and the wrapper-sized RT shows the
+            // truncated visual at the wrong size and offset. Better to walk into the
+            // children so each shape ships at its own bbox and lands correctly in the
+            // hierarchy. Containers whose descendants fit inside still take the atomic
+            // path (bg_slice / icon-style instances) and keep the compositing-drift fix.
+            if (DescendantsExtendPastBounds(node))
+                return false;
             return true;
         }
 
@@ -597,6 +609,35 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (node.Children != null)
                 foreach (var child in node.Children)
                     if (HasTextOrInstanceDescendant(child)) return true;
+            return false;
+        }
+
+        // True when any descendant's bounding box pokes outside the parent's. Subpixel
+        // drift (≤0.5 px from anti-aliased path bounds) is tolerated.
+        private static bool DescendantsExtendPastBounds(FigmaNode parent)
+        {
+            var pb = parent.AbsoluteBoundingBox;
+            if (pb == null || parent.Children == null) return false;
+            const float eps = 0.5f;
+            foreach (var child in parent.Children)
+                if (DescendantExtendsPast(child, pb, eps)) return true;
+            return false;
+        }
+
+        private static bool DescendantExtendsPast(FigmaNode node, FigmaRectangle parentBounds, float eps)
+        {
+            if (node == null) return false;
+            var b = node.AbsoluteBoundingBox;
+            if (b != null)
+            {
+                if (b.X < parentBounds.X - eps) return true;
+                if (b.Y < parentBounds.Y - eps) return true;
+                if (b.X + b.Width > parentBounds.X + parentBounds.Width + eps) return true;
+                if (b.Y + b.Height > parentBounds.Y + parentBounds.Height + eps) return true;
+            }
+            if (node.Children != null)
+                foreach (var child in node.Children)
+                    if (DescendantExtendsPast(child, parentBounds, eps)) return true;
             return false;
         }
 

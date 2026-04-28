@@ -18,11 +18,18 @@ namespace SoobakFigma2Unity.Editor.Layout
 
             var isHorizontal = node.LayoutMode == "HORIZONTAL";
 
+            // A LayoutGroup may already exist when `go` is a PrefabInstance whose source
+            // prefab was extracted with the same auto-layout configuration (typical: a
+            // COMPONENT_SET variant linked into the screen via InstanceConverter — the
+            // variant prefab carries its own LayoutGroup). Unity's [DisallowMultipleComponent]
+            // makes a second AddComponent<HorizontalLayoutGroup>() return null, then the
+            // following padding assignment NREs. Re-use the existing instance instead so
+            // padding/spacing/etc. for this node still apply.
             HorizontalOrVerticalLayoutGroup layoutGroup;
             if (isHorizontal)
-                layoutGroup = go.AddComponent<HorizontalLayoutGroup>();
+                layoutGroup = go.GetComponent<HorizontalLayoutGroup>() ?? go.AddComponent<HorizontalLayoutGroup>();
             else
-                layoutGroup = go.AddComponent<VerticalLayoutGroup>();
+                layoutGroup = go.GetComponent<VerticalLayoutGroup>() ?? go.AddComponent<VerticalLayoutGroup>();
 
             // Padding
             layoutGroup.padding = new RectOffset(

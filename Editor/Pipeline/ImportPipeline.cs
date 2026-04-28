@@ -841,7 +841,44 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 if (HasVisualDescendantInternal(child)) hasVisual = true;
                 if (hasText && hasVisual) break;
             }
-            return hasText && hasVisual;
+            if (!hasText || !hasVisual) return false;
+
+            // STRUCTURAL-INSTANCE guard: a container with a nested INSTANCE that fills
+            // (~all of) the parent's width or height is a structural list / row template,
+            // not a decorative widget. KeyHint's "highlight" (8x8 in 48x48) is decorative
+            // — composite is the right call. Frame 3907's "cell_game_result_statistics"
+            // (461x40 in 461x215) spans the parent's width — it's a row template that
+            // should remain a PrefabInstance, not get baked into a composite blob.
+            //
+            // Threshold: ≥80% width OR ≥80% height. Picks up clearly-structural rows
+            // without tripping on small badges/icons that happen to align with one edge.
+            if (HasStructuralInstanceDescendant(node)) return false;
+            return true;
+        }
+
+        private static bool HasStructuralInstanceDescendant(FigmaNode container)
+        {
+            return HasStructuralInstanceDescendantInternal(container, container);
+        }
+
+        private static bool HasStructuralInstanceDescendantInternal(FigmaNode container, FigmaNode node)
+        {
+            if (node == null) return false;
+            if (node != container && node.NodeType == FigmaNodeType.INSTANCE)
+            {
+                var cb = container.AbsoluteBoundingBox;
+                var nb = node.AbsoluteBoundingBox;
+                if (cb != null && nb != null && cb.Width > 0f && cb.Height > 0f)
+                {
+                    float wRatio = nb.Width  / cb.Width;
+                    float hRatio = nb.Height / cb.Height;
+                    if (wRatio >= 0.8f || hRatio >= 0.8f) return true;
+                }
+            }
+            if (node.Children != null)
+                foreach (var c in node.Children)
+                    if (HasStructuralInstanceDescendantInternal(container, c)) return true;
+            return false;
         }
 
         private static bool HasTextDescendantInternal(FigmaNode node)

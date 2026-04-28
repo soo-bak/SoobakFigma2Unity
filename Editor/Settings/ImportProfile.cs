@@ -1,5 +1,12 @@
 namespace SoobakFigma2Unity.Editor.Settings
 {
+    public enum ImportMode
+    {
+        ComponentsOnly,
+        ScreenOnly,
+        ScreenAndComponents
+    }
+
     public enum ColorSpaceMode
     {
         Auto,
@@ -27,9 +34,8 @@ namespace SoobakFigma2Unity.Editor.Settings
         public string FigmaUrl = "";
         public string PersonalAccessToken = "";
 
-        // Import always runs the full pipeline: extract every Figma COMPONENT referenced
-        // by the imported screens as a standalone prefab in ComponentOutputPath, then
-        // generate the screen prefab(s) with INSTANCEs linked back as PrefabInstances.
+        // Import mode
+        public ImportMode Mode = ImportMode.ScreenAndComponents;
 
         // Image
         public float ImageScale = 2f;

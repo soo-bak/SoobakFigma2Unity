@@ -3,6 +3,7 @@ using SoobakFigma2Unity.Editor.Color;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
 using SoobakFigma2Unity.Editor.Util;
+using SoobakFigma2Unity.Runtime;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
@@ -111,9 +112,16 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             // (BOOLEAN → SetActive, TEXT → TMP.text). PrefabUtility.RecordPrefabInstance...
             // is invoked at the end so Unity registers the changes as proper overrides
             // on the PrefabInstance rather than leaving them as un-tracked edits.
+            //
+            // Pass the prefab-instance ROOT's manifest so the recursion can resolve children
+            // by figmaNodeId — Figma freely allows duplicate sibling names (a button with
+            // both a left "icon" and a right "icon"), and Transform.Find(name) collapses
+            // both onto the first match, mis-applying the second sibling's overrides
+            // (e.g. SetActive(false)) onto the first.
+            var rootManifest = instance.GetComponent<FigmaPrefabManifest>();
             if (instanceNode.Children != null)
             {
-                ApplyChildOverrides(instance, instanceNode, ctx, instanceNode.ComponentProperties);
+                ApplyChildOverrides(instance, instanceNode, ctx, instanceNode.ComponentProperties, rootManifest);
             }
 
             PrefabUtility.RecordPrefabInstancePropertyModifications(instance);
@@ -121,14 +129,24 @@ namespace SoobakFigma2Unity.Editor.Prefabs
 
         private void ApplyChildOverrides(
             GameObject parentGo, FigmaNode parentNode, ImportContext ctx,
-            Dictionary<string, FigmaComponentPropertyValue> ownerProperties)
+            Dictionary<string, FigmaComponentPropertyValue> ownerProperties,
+            FigmaPrefabManifest rootManifest)
         {
             if (parentNode.Children == null) return;
 
             foreach (var childNode in parentNode.Children)
             {
-                // Find matching child in the prefab instance by name
-                var childTransform = parentGo.transform.Find(childNode.Name);
+                // Resolve the matching GO. Prefer figmaNodeId via the root manifest — sibling
+                // name duplicates (e.g. "icon" left + "icon" right) make a name lookup unsafe
+                // because Transform.Find returns the first match for both, and the second
+                // sibling's overrides land on the first GO. Fall back to name lookup when the
+                // manifest doesn't track this child (e.g. for instances of external library
+                // components whose IDs we don't have an entry for).
+                Transform childTransform = null;
+                if (rootManifest != null && !string.IsNullOrEmpty(childNode.Id))
+                    childTransform = rootManifest.FindByNodeId(childNode.Id);
+                if (childTransform == null)
+                    childTransform = parentGo.transform.Find(childNode.Name);
                 if (childTransform == null) continue;
 
                 var childGo = childTransform.gameObject;
@@ -197,7 +215,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 //    their own PrefabInstances (linked in their own InstanceConverter pass)
                 //    and shouldn't have the outer instance's overrides bled into them.
                 if (childNode.NodeType != FigmaNodeType.INSTANCE && childNode.Children != null)
-                    ApplyChildOverrides(childGo, childNode, ctx, ownerProperties);
+                    ApplyChildOverrides(childGo, childNode, ctx, ownerProperties, rootManifest);
             }
         }
 

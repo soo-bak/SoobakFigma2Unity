@@ -59,11 +59,29 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 if (frames.Count == 0) { _logger.Error("No frames to convert."); return; }
                 _logger.Success($"Fetched {frames.Count} frame(s).");
 
-                // 2. Collect image requirements
+                // 1.5. External component / set fetch. Walk the screen tree to find every
+                // INSTANCE.componentId that the screen references. For each one whose master
+                // doesn't already live in the imported tree:
+                //   • If the master is a variant of a COMPONENT_SET (componentSetId set in
+                //     the file's component metadata), fetch the SET — PrefabVariantBuilder
+                //     then handles the entire variant chain in one extraction.
+                //   • Otherwise fetch the standalone COMPONENT directly.
+                // Iterates so transitive nested references get pulled in too. Fetched master
+                // trees feed into the inventory + extraction pass alongside the screens, so
+                // every Figma component referenced by the screen lands as a Components/
+                // prefab. Screen-side InstanceConverter then links to them as PrefabInstances.
+                var componentMasterRoots = await FetchExternalComponentMastersAsync(
+                    api, fileKey, frames, ctx, ct);
+                if (componentMasterRoots.Count > 0)
+                    _logger.Success($"Fetched {componentMasterRoots.Count} external component / set master(s).");
+
+                // 2. Collect image requirements (screens + master roots)
                 progress.Step("Analyzing nodes...");
-                ctx.BuildNodeIndex(frames);
-                foreach (var frame in frames)
-                    CollectImageRequirements(frame, ctx);
+                var allRoots = new List<FigmaNode>(frames);
+                allRoots.AddRange(componentMasterRoots);
+                ctx.BuildNodeIndex(allRoots);
+                foreach (var root in allRoots)
+                    CollectImageRequirements(root, ctx);
                 _logger.Info($"Nodes to rasterize: {ctx.NodesToRasterize.Count}, Image fills: {ctx.ImageFillRefs.Count}");
 
                 // 3. Download images (parallel). Split by RasterBoundsMode so outside-stroke /
@@ -139,7 +157,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 progress.Step("Importing images...");
                 ImportAllImages(ctx, profile);
                 progress.Step("Generating prefabs...");
-                GenerateAndConvert(frames, ctx, profile);
+                GenerateAndConvert(frames, componentMasterRoots, ctx, profile);
                 progress.Step("Done!");
 
                 _logger.Success($"Import complete! {frames.Count} prefab(s) created.");
@@ -156,6 +174,118 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         private ImportContext CreateContext(ImportProfile profile, string fileKey)
         {
             return new ImportContext { Profile = profile, Logger = _logger, FileKey = fileKey };
+        }
+
+        // Walks the imported screen tree to find every INSTANCE.componentId reference,
+        // figures out which masters are external (no matching COMPONENT / COMPONENT_SET in
+        // the tree), promotes each external componentId to its parent COMPONENT_SET id when
+        // applicable (variant-aware fetch — pulling the SET lets PrefabVariantBuilder own
+        // the variant chain), then batch-fetches the resulting node ids via
+        // /v1/files/{key}/nodes. Iterates so transitively-nested components get pulled in
+        // too. Returns the fetched master document trees ready to feed the inventory +
+        // extraction pass.
+        private async Task<List<FigmaNode>> FetchExternalComponentMastersAsync(
+            FigmaApiClient api, string fileKey, List<FigmaNode> screens, ImportContext ctx, CancellationToken ct)
+        {
+            var fetchedRoots = new List<FigmaNode>();
+            var alreadyFetched = new HashSet<string>();
+            var localMasterIds = new HashSet<string>();
+            var referencedIds = new HashSet<string>();
+            foreach (var frame in screens)
+                CollectComponentRefs(frame, referencedIds, localMasterIds);
+
+            const int maxRounds = 5;
+            for (int round = 0; round < maxRounds; round++)
+            {
+                // Determine the actual node ids to fetch this round. For each missing
+                // componentId, check the file's component metadata: if the master is a
+                // variant (componentSetId is set), substitute the SET id so the entire
+                // variant chain comes back in one shot.
+                var toFetch = new HashSet<string>();
+                foreach (var refId in referencedIds)
+                {
+                    if (localMasterIds.Contains(refId)) continue;
+                    var fetchId = ResolveFetchTarget(refId, ctx, localMasterIds);
+                    if (string.IsNullOrEmpty(fetchId)) continue;
+                    if (alreadyFetched.Contains(fetchId)) continue;
+                    toFetch.Add(fetchId);
+                }
+                if (toFetch.Count == 0) break;
+
+                var idList = toFetch.ToList();
+                _logger.Info($"External component round {round + 1}: fetching {idList.Count} master/set node(s).");
+                FigmaNodesResponse response;
+                try
+                {
+                    response = await api.GetFileNodesAsync(fileKey, idList, ct);
+                }
+                catch (System.Exception e)
+                {
+                    _logger.Warn($"External component fetch failed: {e.Message}. Their INSTANCEs will inline.");
+                    break;
+                }
+                if (response?.Nodes == null) break;
+
+                // Capture file-level component / set metadata first so the SET / variant
+                // promotion in subsequent rounds can read the new componentSetIds.
+                if (response.Components != null)
+                    foreach (var kv in response.Components) ctx.Components[kv.Key] = kv.Value;
+                if (response.ComponentSets != null)
+                    foreach (var kv in response.ComponentSets) ctx.ComponentSets[kv.Key] = kv.Value;
+
+                foreach (var id in idList)
+                {
+                    alreadyFetched.Add(id);
+                    if (!response.Nodes.TryGetValue(id, out var wrapper) || wrapper?.Document == null)
+                    {
+                        _logger.Warn($"Master fetch: node {id} not in response — its INSTANCEs will inline.");
+                        continue;
+                    }
+                    fetchedRoots.Add(wrapper.Document);
+                    if (wrapper.Components != null)
+                        foreach (var kv in wrapper.Components) ctx.Components[kv.Key] = kv.Value;
+                    // Walk the new master so its own nested INSTANCE references seed the
+                    // next round, AND so the master itself + its variants register as
+                    // localMasters (preventing redundant fetch of variants when their SET
+                    // was already pulled in).
+                    CollectComponentRefs(wrapper.Document, referencedIds, localMasterIds);
+                }
+            }
+            return fetchedRoots;
+        }
+
+        // For a referenced componentId, decide which node id to actually fetch:
+        //   - If the file's component metadata says this id has a parent COMPONENT_SET,
+        //     fetch the SET (gives us all variants together — PrefabVariantBuilder uses
+        //     the SET node to build the variant chain).
+        //   - Otherwise fetch the COMPONENT directly.
+        // Returns the chosen fetch id (may equal the input). Empty/null → caller skips.
+        private static string ResolveFetchTarget(string componentId, ImportContext ctx, HashSet<string> localMasterIds)
+        {
+            if (string.IsNullOrEmpty(componentId)) return null;
+            if (ctx.Components != null && ctx.Components.TryGetValue(componentId, out var meta)
+                && !string.IsNullOrEmpty(meta?.ComponentSetId))
+            {
+                var setId = meta.ComponentSetId;
+                // If the SET is already in the imported tree, we don't need to fetch.
+                if (localMasterIds.Contains(setId)) return null;
+                return setId;
+            }
+            return componentId;
+        }
+
+        // Light pre-walk: collect every INSTANCE's componentId reference and every
+        // COMPONENT / COMPONENT_SET id that's already present in the tree, so the fetch
+        // loop knows what's already covered locally vs. what still needs a fetch.
+        private static void CollectComponentRefs(FigmaNode node, HashSet<string> referenced, HashSet<string> localMasters)
+        {
+            if (node == null) return;
+            if (node.NodeType == FigmaNodeType.COMPONENT || node.NodeType == FigmaNodeType.COMPONENT_SET)
+                if (!string.IsNullOrEmpty(node.Id)) localMasters.Add(node.Id);
+            if (node.NodeType == FigmaNodeType.INSTANCE && !string.IsNullOrEmpty(node.ComponentId))
+                referenced.Add(node.ComponentId);
+            if (node.Children != null)
+                foreach (var c in node.Children) CollectComponentRefs(c, referenced, localMasters);
         }
 
         private List<FigmaNode> CollectFrames(FigmaNodesResponse response, IReadOnlyList<string> nodeIds, ImportContext ctx)
@@ -175,13 +305,20 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             return frames;
         }
 
-        private void GenerateAndConvert(List<FigmaNode> frames, ImportContext ctx, ImportProfile profile)
+        private void GenerateAndConvert(
+            List<FigmaNode> screens,
+            List<FigmaNode> componentMasterRoots,
+            ImportContext ctx, ImportProfile profile)
         {
-            // Always run the full pipeline: extract every Figma COMPONENT referenced by the
-            // imported screens as a standalone prefab in ComponentOutputPath, then write
-            // each screen frame so its INSTANCEs link back as PrefabInstances.
-            GenerateComponentPrefabs(frames, ctx, profile);
-            foreach (var frame in frames)
+            // Components pass walks BOTH the screens AND any external master roots we
+            // pre-fetched, so every COMPONENT referenced by the screens — whether its
+            // master lives in the imported screen tree or in a separate Components page —
+            // lands as a standalone prefab in ComponentOutputPath. The screens-write pass
+            // only writes the user's selected frames; master roots stay in Components/.
+            var allRoots = new List<FigmaNode>(screens);
+            allRoots.AddRange(componentMasterRoots);
+            GenerateComponentPrefabs(allRoots, ctx, profile);
+            foreach (var frame in screens)
                 ConvertAndSaveFrame(frame, ctx, profile);
             AssetDatabase.Refresh();
         }

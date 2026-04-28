@@ -85,11 +85,15 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 cg.alpha = instanceNode.Opacity;
             }
 
-            // Fill color overrides on root
+            // Fill color overrides on root — only when the Image is a pure solid colour
+            // (no sprite). When the Image carries a baked sprite, that PNG already encodes
+            // the correct visual including its colour; assigning the Figma fill colour here
+            // would tint the sprite (e.g. an ivory rounded-rect sprite turned brown by the
+            // master's brown fill colour landing on top).
             if (instanceNode.HasVisibleFills)
             {
                 var image = instance.GetComponent<Image>();
-                if (image != null && instanceNode.Fills != null)
+                if (image != null && image.sprite == null && instanceNode.Fills != null)
                 {
                     foreach (var fill in instanceNode.Fills)
                     {
@@ -157,7 +161,11 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                     }
                 }
 
-                // 3) Image/fill overrides
+                // 3) Image/fill overrides — solid-colour overrides only when the child has
+                // no sprite (a baked sprite already encodes the colour; tinting it with
+                // the Figma fill colour produces washed-out / wrong-tinted visuals like the
+                // ivory rounded-rect sprite turning brown). Image-fill overrides still apply
+                // because they replace the sprite outright.
                 var image = childGo.GetComponent<Image>();
                 if (image != null && childNode.HasVisibleFills)
                 {
@@ -165,7 +173,8 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                     {
                         if (fill.Visible && fill.IsSolid && fill.Color != null)
                         {
-                            image.color = ColorSpaceHelper.Convert(fill.Color, childNode.Opacity * fill.Opacity);
+                            if (image.sprite == null)
+                                image.color = ColorSpaceHelper.Convert(fill.Color, childNode.Opacity * fill.Opacity);
                             break;
                         }
 

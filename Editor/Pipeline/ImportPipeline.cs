@@ -734,10 +734,15 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             !NodeConverterRegistry.IsMaskContainer(n); // preserve mask containers
 
         // An "atomic visual group" is a container whose entire descendant tree is purely
-        // decorative — only RECTANGLE / VECTOR / ELLIPSE / STAR / LINE / REGULAR_POLYGON /
-        // BOOLEAN_OPERATION primitives. No TEXT (we want text editable), no nested INSTANCE
-        // (we want its prefab linkage preserved). Such groups ship as one PNG of the whole
-        // container; the descendant tree isn't walked at all.
+        // visual — no TEXT (we want text editable), no nested FRAME / COMPONENT (we want
+        // structural sub-containers preserved). Decorative INSTANCE wrappers around
+        // primitives (e.g. game_result_fail_frame's BOOLEAN_OPERATION wrappers, KeyHint's
+        // highlight) are allowed, traded for visual fidelity — Figma's compositing of the
+        // whole subtree (BOOLEAN ops, anti-aliasing, blend overlap) is hard to reproduce
+        // shape-by-shape in UGUI, so a single rasterised PNG matches Figma exactly. Trade-
+        // off: the nested INSTANCEs lose their prefab linkage in the flattened result.
+        // Such groups ship as one PNG of the whole container; the descendant tree isn't
+        // walked at all.
         private static bool IsAtomicVisualGroup(FigmaNode node)
         {
             if (node == null || !node.HasChildren) return false;
@@ -745,7 +750,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             if (t != FigmaNodeType.FRAME && t != FigmaNodeType.GROUP && t != FigmaNodeType.INSTANCE)
                 return false;
             foreach (var child in node.Children)
-                if (HasTextOrInstanceDescendant(child))
+                if (HasTextOrFrameDescendant(child))
                     return false;
 
             // Atomic export uses the wrapper's absoluteBoundingBox as the canvas. If a
@@ -759,15 +764,22 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             return true;
         }
 
-        private static bool HasTextOrInstanceDescendant(FigmaNode node)
+        // Reject TEXT (must stay editable) and FRAME / COMPONENT / COMPONENT_SET (structural
+        // sub-containers). INSTANCEs are permitted — they're the wrapper pattern Figma uses
+        // for decorative compositions (BOOLEAN_OPERATION wrappers, icon badges, etc.) and
+        // flattening them along with the primitives gets us pixel-accurate visual fidelity.
+        // GROUP is permitted because it's purely organisational (no layout / no fills).
+        private static bool HasTextOrFrameDescendant(FigmaNode node)
         {
             if (node == null) return false;
             var t = node.NodeType;
             if (t == FigmaNodeType.TEXT) return true;
-            if (t == FigmaNodeType.INSTANCE) return true;
+            if (t == FigmaNodeType.FRAME ||
+                t == FigmaNodeType.COMPONENT ||
+                t == FigmaNodeType.COMPONENT_SET) return true;
             if (node.Children != null)
                 foreach (var child in node.Children)
-                    if (HasTextOrInstanceDescendant(child)) return true;
+                    if (HasTextOrFrameDescendant(child)) return true;
             return false;
         }
 

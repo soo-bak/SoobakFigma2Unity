@@ -118,6 +118,15 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 if (variantManifest != null)
                     variantManifest.SetRootComponentId(variant.ComponentId);
 
+                // Strip spurious RectTransform overrides on child Transforms that Unity injects
+                // between InstantiatePrefab and SaveAsPrefabAsset — typically the LayoutGroup's
+                // automatic re-layout pass writes (0,0,0,0) into LayoutGroup-managed children,
+                // and SaveAsPrefabAsset captures every diff vs base as a variant override. We
+                // didn't ask ApplyOverrides to touch any child RT, so any RT diff here is noise
+                // that collapses children to origin in the variant. Drop them so the variant
+                // inherits the base's RT layout cleanly.
+                StripChildRectTransformOverrides(basePrefabInstance);
+
                 var variantPrefab = PrefabUtility.SaveAsPrefabAsset(basePrefabInstance, variantPath);
                 result[variant.ComponentId] = variantPath;
                 ctx.GeneratedPrefabs[variant.ComponentId] = variantPath;
@@ -128,6 +137,36 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             }
 
             return result;
+        }
+
+        // Drops RectTransform-targeting modifications on every Transform except the variant
+        // root. We deliberately don't override child RTs in ApplyComponentOverrides; anything
+        // captured here (typically LayoutGroup's auto re-layout writing m_AnchorMin/Max,
+        // m_SizeDelta, m_AnchoredPosition to (0,0)) is noise that collapses children to origin
+        // in the saved variant prefab.
+        private static void StripChildRectTransformOverrides(GameObject prefabInstance)
+        {
+            var root = prefabInstance.transform;
+            var rootRt = prefabInstance.GetComponent<RectTransform>();
+            var mods = PrefabUtility.GetPropertyModifications(prefabInstance);
+            if (mods == null || mods.Length == 0) return;
+
+            var kept = new List<PropertyModification>(mods.Length);
+            foreach (var m in mods)
+            {
+                if (m == null || m.target == null) { kept.Add(m); continue; }
+                // Only filter RectTransforms; everything else (Image, TMP, LayoutElement,
+                // LayoutGroup, manifest, etc.) goes through unchanged.
+                if (m.target is RectTransform rt)
+                {
+                    // Keep root RT mods (we explicitly override root sizeDelta), drop child RT mods.
+                    if (rt != rootRt) continue;
+                }
+                kept.Add(m);
+            }
+
+            if (kept.Count != mods.Length)
+                PrefabUtility.SetPropertyModifications(prefabInstance, kept.ToArray());
         }
 
         /// <summary>

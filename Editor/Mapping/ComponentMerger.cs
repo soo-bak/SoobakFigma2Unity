@@ -63,7 +63,14 @@ namespace SoobakFigma2Unity.Editor.Mapping
             }
 
             // Remove managed components present on existing but absent from new.
+            // Order matters: a UI Graphic (Image/RawImage/Text/TMP) carries
+            // [RequireComponent(typeof(CanvasRenderer))], so DestroyImmediate on the
+            // CanvasRenderer first throws "Can't remove CanvasRenderer because Image
+            // depends on it". Collect candidates, then remove dependents (everything
+            // else) before dependencies (CanvasRenderer) — and skip CanvasRenderer
+            // entirely if any UI Graphic still remains on the GO afterwards.
             var existingComps = existingGo.GetComponents<Component>();
+            var toRemoveLast = new List<Component>();
             foreach (var ec in existingComps)
             {
                 if (ec == null) continue;
@@ -74,7 +81,19 @@ namespace SoobakFigma2Unity.Editor.Mapping
                     continue;
                 }
                 if (seenTypesInNew.Contains(t)) continue;
-                if (ec is Transform) continue; // Transform cannot be removed
+                if (ec is Transform) continue;          // Transform cannot be removed
+                if (ec is CanvasRenderer)
+                {
+                    toRemoveLast.Add(ec);               // defer until dependents are gone
+                    continue;
+                }
+                UnityEngine.Object.DestroyImmediate(ec);
+                removed++;
+            }
+            foreach (var ec in toRemoveLast)
+            {
+                if (ec == null) continue;
+                if (existingGo.GetComponent<UnityEngine.UI.Graphic>() != null) continue;
                 UnityEngine.Object.DestroyImmediate(ec);
                 removed++;
             }

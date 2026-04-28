@@ -843,15 +843,27 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             }
             if (!hasText || !hasVisual) return false;
 
-            // STRUCTURAL-INSTANCE guard: a container with a nested INSTANCE that fills
-            // (~all of) the parent's width or height is a structural list / row template,
-            // not a decorative widget. KeyHint's "highlight" (8x8 in 48x48) is decorative
-            // — composite is the right call. Frame 3907's "cell_game_result_statistics"
-            // (461x40 in 461x215) spans the parent's width — it's a row template that
-            // should remain a PrefabInstance, not get baked into a composite blob.
+            // STRUCTURAL-INSTANCE guard: a nested INSTANCE that's "more than a decoration"
+            // must remain a PrefabInstance — baking it into the composite would silently
+            // destroy its prefab linkage AND risk a text-bleed-through artefact under any
+            // TMP overlay added on top. Two independent signals classify an INSTANCE as
+            // structural; either one is enough.
             //
-            // Threshold: ≥80% width OR ≥80% height. Picks up clearly-structural rows
-            // without tripping on small badges/icons that happen to align with one edge.
+            //   1) Size: the INSTANCE spans ≥80% of the parent's width or height.
+            //      Picks up list-row templates like Frame 3907's
+            //      "cell_game_result_statistics" (461x40 inside 461x306, wRatio = 1.0)
+            //      without tripping on small badges aligned with one edge.
+            //
+            //   2) Text inside: the INSTANCE has any TEXT descendant. A component that
+            //      carries its own label/value is semantically a cell/button/badge with
+            //      meaning, not a decorative shape — the user wants its prefab linkage
+            //      preserved regardless of size. KeyHint's "highlight" INSTANCE (8x8,
+            //      no text inside) stays decorative and still flattens via the composite
+            //      path; cell_game_result_statistics (text inside) does not.
+            //
+            // The two signals reinforce each other: (1) catches large structural rows
+            // that may not have text yet (placeholder cells), (2) catches small but
+            // semantically meaningful components that the size threshold misses.
             if (HasStructuralInstanceDescendant(node)) return false;
             return true;
         }
@@ -874,6 +886,8 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     float hRatio = nb.Height / cb.Height;
                     if (wRatio >= 0.8f || hRatio >= 0.8f) return true;
                 }
+
+                if (HasTextDescendantInternal(node)) return true;
             }
             if (node.Children != null)
                 foreach (var c in node.Children)

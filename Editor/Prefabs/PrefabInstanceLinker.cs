@@ -136,18 +136,25 @@ namespace SoobakFigma2Unity.Editor.Prefabs
 
             foreach (var childNode in parentNode.Children)
             {
-                // Resolve the matching GO. Prefer figmaNodeId via the root manifest — sibling
-                // name duplicates (e.g. "icon" left + "icon" right) make a name lookup unsafe
-                // because Transform.Find returns the first match for both, and the second
-                // sibling's overrides land on the first GO. Fall back to name lookup when the
-                // manifest doesn't track this child (e.g. for instances of external library
-                // components whose IDs we don't have an entry for).
+                // Resolve the matching GO via figmaNodeId. Sibling name duplicates (e.g. "icon"
+                // left + "icon" right) make a name lookup unsafe — Transform.Find returns the
+                // first match for both, so the second sibling's overrides land on the first GO.
+                // When the manifest doesn't track this Figma child it usually means we filtered
+                // it out at convert time (visible=False, etc.); applying its override to the
+                // wrong GO would actively break the instance. Fall back to name lookup ONLY
+                // when there's no manifest at all (legacy prefabs).
                 Transform childTransform = null;
-                if (rootManifest != null && !string.IsNullOrEmpty(childNode.Id))
-                    childTransform = rootManifest.FindByNodeId(childNode.Id);
-                if (childTransform == null)
+                if (rootManifest != null)
+                {
+                    if (!string.IsNullOrEmpty(childNode.Id))
+                        childTransform = rootManifest.FindByNodeId(childNode.Id);
+                    if (childTransform == null) continue; // tracked tree, not in manifest → skip
+                }
+                else
+                {
                     childTransform = parentGo.transform.Find(childNode.Name);
-                if (childTransform == null) continue;
+                    if (childTransform == null) continue;
+                }
 
                 var childGo = childTransform.gameObject;
 

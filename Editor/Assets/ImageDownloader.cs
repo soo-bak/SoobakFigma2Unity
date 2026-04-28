@@ -113,11 +113,10 @@ namespace SoobakFigma2Unity.Editor.Assets
             return new Dictionary<string, string>(result);
         }
 
+        // Temp-dir filenames stay keyed by Figma's nodeId / imageRef so debugging traces
+        // can correlate a downloaded blob with the upstream node. Final asset filenames
+        // are decided later by AssetNameAllocator using node.Name + content hash.
         private static string SanitizeFileName(string name)
-        {
-            foreach (var c in Path.GetInvalidFileNameChars())
-                name = name.Replace(c, '_');
-            return name.Replace(":", "_");
-        }
+            => Util.FileNameSanitizer.Sanitize(name, fallback: "node");
     }
 }

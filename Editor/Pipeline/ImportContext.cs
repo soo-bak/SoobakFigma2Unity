@@ -65,6 +65,14 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         /// <summary>All image fill refs that need downloading.</summary>
         public HashSet<string> ImageFillRefs { get; set; } = new HashSet<string>();
 
+        /// <summary>
+        /// imageRef → name of the first node that referenced this fill. Used to give
+        /// downloaded fill PNGs a human-readable filename instead of the opaque hash
+        /// Figma returns. Pure presentational hint; multiple nodes can share an
+        /// imageRef and we just keep whichever was visited first.
+        /// </summary>
+        public Dictionary<string, string> ImageFillNameHints { get; set; } = new Dictionary<string, string>();
+
         /// <summary>Index of all nodes by ID (for lookups during image import).</summary>
         public Dictionary<string, FigmaNode> NodeIndex { get; set; } = new Dictionary<string, FigmaNode>();
 

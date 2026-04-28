@@ -184,7 +184,19 @@ namespace SoobakFigma2Unity.Editor.Assets
         /// Loads a PNG, and if its peak alpha is at-or-below <see cref="LowAlphaThreshold"/>,
         /// multiplies every pixel's alpha by <see cref="LowAlphaBoostFactor"/> (clamped to 255)
         /// and rewrites the file. Otherwise leaves the file untouched. Silent no-op on any error.
+        ///
+        /// Idempotent — once a file has been boosted its peak alpha exceeds the threshold,
+        /// so subsequent calls bail out at the early return. Exposed as <c>internal</c> so
+        /// callers in the import pipeline can apply the boost on temp files BEFORE hashing
+        /// for content-based dedup, ensuring the hash of the temp matches the hash of the
+        /// already-on-disk asset across re-imports.
         /// </summary>
+        internal static void MaybeBoostLowAlphaForLinear(string fullPath)
+        {
+            if (PlayerSettings.colorSpace != ColorSpace.Linear) return;
+            TryBoostLowAlpha(fullPath);
+        }
+
         private static void TryBoostLowAlpha(string fullPath)
         {
             Texture2D tex = null;

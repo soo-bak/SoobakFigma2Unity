@@ -589,70 +589,183 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             var imageDir = profile.ImageOutputPath;
             var nineSlice = profile.AutoNineSlice ? new NineSliceDetector(_logger, profile.ImageScale) : null;
 
+            // Allocator drives both the human-readable filename (Figma node name first,
+            // collision counter on conflict) and the content-hash dedup. Preload existing
+            // PNGs so unchanged bytes keep their existing asset path → stable Unity GUID
+            // across re-imports.
+            var allocator = new AssetNameAllocator(imageDir);
+            allocator.PreloadDirectory();
+
             var nodeToAsset = new Dictionary<string, string>();
             var fillToAsset = new Dictionary<string, string>();
-            var allPaths = new List<string>();
+            // Tracks asset paths we just wrote (or just claimed for the first time this
+            // run). Only these strictly need a copy step — pre-existing on-disk files
+            // with matching content can skip it.
+            var copiedPaths = new HashSet<string>();
+            int totalDownloads = ctx.NodeImagePaths.Count + ctx.FillImagePaths.Count;
 
-            foreach (var kv in ctx.NodeImagePaths)
+            // Sort keys for deterministic collision-counter assignment so re-imports of
+            // the same Figma data always pick the same {name}__2 / __3 slots.
+            var sortedNodeKeys = ctx.NodeImagePaths.Keys.ToList();
+            sortedNodeKeys.Sort(System.StringComparer.Ordinal);
+            foreach (var nodeId in sortedNodeKeys)
             {
-                var ap = Path.Combine(imageDir, $"{kv.Key.Replace(":", "_")}.png");
-                ImageImporter.CopyToAssets(kv.Value, ap);
-                nodeToAsset[kv.Key] = ap; allPaths.Add(ap);
+                var sourcePath = ctx.NodeImagePaths[nodeId];
+                AllocateAndCopy(sourcePath, ResolveNodeName(ctx, nodeId), allocator,
+                    copiedPaths, out var assetPath);
+                if (!string.IsNullOrEmpty(assetPath))
+                    nodeToAsset[nodeId] = assetPath;
             }
-            foreach (var kv in ctx.FillImagePaths)
+
+            var sortedFillKeys = ctx.FillImagePaths.Keys.ToList();
+            sortedFillKeys.Sort(System.StringComparer.Ordinal);
+            foreach (var imageRef in sortedFillKeys)
             {
-                var ap = Path.Combine(imageDir, $"fill_{kv.Key.Replace(":", "_").Replace("/", "_")}.png");
-                ImageImporter.CopyToAssets(kv.Value, ap);
-                fillToAsset[kv.Key] = ap; allPaths.Add(ap);
+                var sourcePath = ctx.FillImagePaths[imageRef];
+                ctx.ImageFillNameHints.TryGetValue(imageRef, out var hintName);
+                if (string.IsNullOrEmpty(hintName)) hintName = imageRef;
+                AllocateAndCopy(sourcePath, "fill_" + hintName, allocator,
+                    copiedPaths, out var assetPath);
+                if (!string.IsNullOrEmpty(assetPath))
+                    fillToAsset[imageRef] = assetPath;
             }
-            if (allPaths.Count == 0) return;
 
-            _logger.Info($"Batch importing {allPaths.Count} images...");
-            var sprites = ImageImporter.BatchImport(allPaths, profile.ImageScale);
+            // Run BatchImport over EVERY referenced asset path — including ones that were
+            // already on disk before this run — so importer settings stay in sync with
+            // the current ImageScale / AutoNineSlice profile, and Sprite refs are re-loaded
+            // fresh into ctx.NodeSprites.
+            var allReferencedPaths = new HashSet<string>(nodeToAsset.Values);
+            foreach (var p in fillToAsset.Values) allReferencedPaths.Add(p);
+            if (allReferencedPaths.Count == 0) return;
 
+            _logger.Info($"Image dedup: {totalDownloads} downloaded → " +
+                         $"{allReferencedPaths.Count} unique sprites " +
+                         $"({allocator.DeduplicatedCount} duplicates collapsed, " +
+                         $"{copiedPaths.Count} new files written).");
+
+            var sprites = ImageImporter.BatchImport(allReferencedPaths.ToList(), profile.ImageScale);
+
+            // 9-slice borders: derived from the source node's geometry. Multiple node IDs
+            // can share an asset path after dedup, so detect-and-apply borders once per
+            // asset path (using the first sliceable node we see for that path). Every
+            // dedup'd node shares the same pixels and therefore the same valid border
+            // math, so a single application covers all of them.
+            var sliceEvaluated = new HashSet<string>();
+            var sliceApplied = new HashSet<string>();
             foreach (var kv in nodeToAsset)
             {
                 if (!sprites.TryGetValue(kv.Value, out var s)) continue;
                 ctx.NodeSprites[kv.Key] = s;
-                if (nineSlice != null && ctx.NodeIndex.TryGetValue(kv.Key, out var node))
+                if (nineSlice == null) continue;
+                if (sliceEvaluated.Contains(kv.Value)) continue;
+                if (!ctx.NodeIndex.TryGetValue(kv.Key, out var node)) continue;
+
+                // Disqualifying conditions short-circuit without marking the path as
+                // evaluated, so a later dedup'd node that IS eligible can still try.
+                // (In practice, nodes sharing an asset path share pixels and therefore
+                // the same eligibility, but this stays safe under that invariant.)
+                if (ctx.CompositeContainerIds.Contains(kv.Key))
                 {
-                    if (ctx.CompositeContainerIds.Contains(kv.Key))
-                        continue;
+                    sliceEvaluated.Add(kv.Value);
+                    continue;
+                }
 
-                    // 9-slice border math is in pixels of the EXPORTED sprite, derived from
-                    // node dimensions × scale. That equation only holds when the sprite size
-                    // equals the bounding box — i.e. AbsoluteBounds export. RenderBounds
-                    // exports are slightly larger (stroke / shadow padding) and the borders
-                    // would land in the wrong place, breaking the slice. Skip 9-slice for
-                    // those nodes — they get drawn as Image.Type.Simple from the FullRect
-                    // sprite, which is fine for a stroked rectangle that doesn't tile.
-                    if (ctx.NodeRasterBoundsModes.TryGetValue(kv.Key, out var mode)
-                        && mode == ImportContext.RasterBoundsMode.RenderBounds)
-                        continue;
+                // 9-slice border math is in pixels of the EXPORTED sprite, derived from
+                // node dimensions × scale. That equation only holds when the sprite size
+                // equals the bounding box — i.e. AbsoluteBounds export. RenderBounds
+                // exports are slightly larger (stroke / shadow padding) and the borders
+                // would land in the wrong place, breaking the slice. Skip 9-slice for
+                // those nodes — they get drawn as Image.Type.Simple from the FullRect
+                // sprite, which is fine for a stroked rectangle that doesn't tile.
+                if (ctx.NodeRasterBoundsModes.TryGetValue(kv.Key, out var mode)
+                    && mode == ImportContext.RasterBoundsMode.RenderBounds)
+                {
+                    sliceEvaluated.Add(kv.Value);
+                    continue;
+                }
 
-                    // Atomic visual groups bake their entire subtree into one PNG; if the
-                    // group contains multiple inner shapes (Rectangle 1465 + 1466 + a vector
-                    // accent + ...), 9-slicing the bake would stretch every interior pixel
-                    // proportionally and warp the inner layout. The outer corner radius is
-                    // sliceable in theory but separating bg curve from baked interior here
-                    // would require re-rendering, which defeats the point. Force
-                    // Image.Type.Simple by leaving spriteBorder at zero.
-                    if (IsAtomicVisualGroup(node))
-                        continue;
+                // Atomic visual groups bake their entire subtree into one PNG; if the
+                // group contains multiple inner shapes (Rectangle 1465 + 1466 + a vector
+                // accent + ...), 9-slicing the bake would stretch every interior pixel
+                // proportionally and warp the inner layout. The outer corner radius is
+                // sliceable in theory but separating bg curve from baked interior here
+                // would require re-rendering, which defeats the point. Force
+                // Image.Type.Simple by leaving spriteBorder at zero.
+                if (IsAtomicVisualGroup(node))
+                {
+                    sliceEvaluated.Add(kv.Value);
+                    continue;
+                }
 
-                    var borders = nineSlice.DetectBorders(node);
-                    if (borders != Vector4.zero)
-                    {
-                        ImageImporter.SetSliceBorders(kv.Value, borders);
-                        s = AssetDatabase.LoadAssetAtPath<Sprite>(kv.Value);
-                        if (s != null) ctx.NodeSprites[kv.Key] = s;
-                    }
+                sliceEvaluated.Add(kv.Value);
+                var borders = nineSlice.DetectBorders(node);
+                if (borders != Vector4.zero)
+                {
+                    ImageImporter.SetSliceBorders(kv.Value, borders);
+                    sliceApplied.Add(kv.Value);
                 }
             }
+            // Refresh Sprite refs ONLY for paths whose spriteBorder actually changed;
+            // dedup'd siblings need the post-slice instance, not the stale pre-slice
+            // one held in the BatchImport result map.
+            if (sliceApplied.Count > 0)
+            {
+                foreach (var kv in nodeToAsset)
+                {
+                    if (!sliceApplied.Contains(kv.Value)) continue;
+                    var refreshed = AssetDatabase.LoadAssetAtPath<Sprite>(kv.Value);
+                    if (refreshed != null) ctx.NodeSprites[kv.Key] = refreshed;
+                }
+            }
+
             foreach (var kv in fillToAsset)
                 if (sprites.TryGetValue(kv.Value, out var s)) ctx.FillSprites[kv.Key] = s;
 
-            _logger.Success($"Imported {sprites.Count} sprites.");
+            _logger.Success($"Imported {allReferencedPaths.Count} sprites.");
+        }
+
+        // Allocates the destination asset path for a downloaded PNG and copies the
+        // source file into place when needed. Updates <paramref name="copiedPaths"/>
+        // so the caller knows which paths were freshly written this run.
+        private void AllocateAndCopy(
+            string sourcePath, string desiredName,
+            AssetNameAllocator allocator, HashSet<string> copiedPaths,
+            out string assetPath)
+        {
+            assetPath = null;
+            if (string.IsNullOrEmpty(sourcePath) || !File.Exists(sourcePath))
+                return;
+
+            // Apply the Linear-color alpha boost to the temp file BEFORE hashing so the
+            // computed hash matches the on-disk hash that PreloadDirectory captured for
+            // already-imported sprites. The boost is idempotent — running it a second
+            // time inside BatchImport is a no-op.
+            ImageImporter.MaybeBoostLowAlphaForLinear(sourcePath);
+
+            byte[] bytes;
+            try { bytes = File.ReadAllBytes(sourcePath); }
+            catch (System.Exception e)
+            {
+                _logger.Warn($"Failed to read downloaded image '{sourcePath}': {e.Message}");
+                return;
+            }
+            if (bytes.Length == 0) return;
+
+            var alloc = allocator.Allocate(desiredName, bytes);
+            assetPath = alloc.AssetPath;
+            if (!alloc.AlreadyOnDisk)
+            {
+                ImageImporter.CopyToAssets(sourcePath, alloc.AssetPath);
+                copiedPaths.Add(alloc.AssetPath);
+            }
+        }
+
+        private static string ResolveNodeName(ImportContext ctx, string nodeId)
+        {
+            if (ctx.NodeIndex.TryGetValue(nodeId, out var node)
+                && !string.IsNullOrEmpty(node.Name))
+                return node.Name;
+            return nodeId;
         }
 
         // ─── Helpers ────────────────────────────────────
@@ -710,8 +823,19 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             {
                 // Only collect fill image refs for nodes that are NOT rasterized
                 foreach (var fill in node.Fills)
-                    if (fill.Visible && fill.IsImage && !string.IsNullOrEmpty(fill.ImageRef))
-                        ctx.ImageFillRefs.Add(fill.ImageRef);
+                {
+                    if (!fill.Visible || !fill.IsImage || string.IsNullOrEmpty(fill.ImageRef))
+                        continue;
+                    ctx.ImageFillRefs.Add(fill.ImageRef);
+                    // Remember the first node name we saw using this fill so the
+                    // downloaded PNG gets a readable filename later. Skip empty
+                    // names so the allocator's fallback ("node") doesn't win the slot.
+                    if (!string.IsNullOrEmpty(node.Name) &&
+                        !ctx.ImageFillNameHints.ContainsKey(fill.ImageRef))
+                    {
+                        ctx.ImageFillNameHints[fill.ImageRef] = node.Name;
+                    }
+                }
             }
 
             // Atomic visual group: the whole subtree is folded into the parent's PNG, so we

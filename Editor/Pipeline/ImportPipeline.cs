@@ -340,12 +340,14 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 bool converterAlreadyMadeChildren = childGo.transform.childCount > 0;
 
                 bool childIsComposite = ctx.CompositeContainerIds.Contains(childNode.Id);
-                if (childIsComposite)
+                if (childIsComposite && !converterAlreadyMadeChildren)
                 {
                     // Composite container child: the Image already holds the CPU-composite
                     // of every decorative descendant. Skip the normal recursion (it would
                     // re-render those decoratives on top of the composite) and instead add
-                    // editable TMP overlays for each TEXT descendant.
+                    // editable TMP overlays for each TEXT descendant. Skip when the converter
+                    // already populated children (PrefabInstance) — the prefab brings its
+                    // own text TMPs and any overlay we add here would duplicate them.
                     AddTextOverlays(childNode, childGo, ctx, profile);
                 }
                 else if (childNode.HasChildren && childNode.NodeType != FigmaNodeType.TEXT

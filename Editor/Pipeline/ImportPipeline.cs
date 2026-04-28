@@ -177,15 +177,12 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
         private void GenerateAndConvert(List<FigmaNode> frames, ImportContext ctx, ImportProfile profile)
         {
-            if (profile.Mode != ImportMode.ScreenOnly)
-                GenerateComponentPrefabs(frames, ctx, profile);
-
-            if (profile.Mode != ImportMode.ComponentsOnly)
-            {
-                foreach (var frame in frames)
-                    ConvertAndSaveFrame(frame, ctx, profile);
-            }
-
+            // Always run the full pipeline: extract every Figma COMPONENT referenced by the
+            // imported screens as a standalone prefab in ComponentOutputPath, then write
+            // each screen frame so its INSTANCEs link back as PrefabInstances.
+            GenerateComponentPrefabs(frames, ctx, profile);
+            foreach (var frame in frames)
+                ConvertAndSaveFrame(frame, ctx, profile);
             AssetDatabase.Refresh();
         }
 

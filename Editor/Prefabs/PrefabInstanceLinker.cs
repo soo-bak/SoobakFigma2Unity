@@ -143,11 +143,22 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 // it out at convert time (visible=False, etc.); applying its override to the
                 // wrong GO would actively break the instance. Fall back to name lookup ONLY
                 // when there's no manifest at all (legacy prefabs).
+                //
+                // Compound-id strip: a Figma INSTANCE on the screen resolves its children with
+                // compound ids like "I9160:147973;7708:32996" (or deeper "I<a>;I<b>;<masterId>"
+                // for nested instances). The MASTER's prefab manifest stores the BARE master
+                // child id (7708:32996), so a direct lookup of the compound form never matches
+                // and every per-instance override silently skips — the symptom is "every
+                // PrefabInstance shows the master's default values, all looking identical".
+                // Strip everything up to and including the last ';' before lookup. Bare ids
+                // pass through unchanged so screen-side variants linked directly to extracted
+                // prefabs keep matching.
                 Transform childTransform = null;
                 if (rootManifest != null)
                 {
-                    if (!string.IsNullOrEmpty(childNode.Id))
-                        childTransform = rootManifest.FindByNodeId(childNode.Id);
+                    var lookupId = StripCompoundInstanceIdPrefix(childNode.Id);
+                    if (!string.IsNullOrEmpty(lookupId))
+                        childTransform = rootManifest.FindByNodeId(lookupId);
                     if (childTransform == null) continue; // tracked tree, not in manifest → skip
                 }
                 else
@@ -261,6 +272,16 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                     // whatever component the master extraction baked in.
                 }
             }
+        }
+
+        // Drops the "I<instanceId>;...;" prefix that Figma adds to children of a resolved
+        // INSTANCE so the bare master child id can match the prefab manifest entry. Bare
+        // ids (no ';') pass through unchanged.
+        private static string StripCompoundInstanceIdPrefix(string nodeId)
+        {
+            if (string.IsNullOrEmpty(nodeId)) return nodeId;
+            int lastSep = nodeId.LastIndexOf(';');
+            return lastSep < 0 ? nodeId : nodeId.Substring(lastSep + 1);
         }
     }
 }

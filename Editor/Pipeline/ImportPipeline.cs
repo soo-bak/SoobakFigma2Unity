@@ -332,11 +332,12 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     childGo.GetComponent<UnityEngine.UI.Image>() != null &&
                     childGo.GetComponent<UnityEngine.UI.Image>().sprite != null &&
                     !ctx.NodeSprites.ContainsKey(childNode.Id);
-                // True when childGo is itself the ROOT of a PrefabInstance (created by
-                // InstanceConverter.PrefabInstanceLinker). Its children come from the source
-                // prefab; we must NOT recurse here, otherwise the screen ends up with a
-                // second copy of every Figma child living next to the prefab's own ones.
-                bool isPrefabInstance = PrefabUtility.GetNearestPrefabInstanceRoot(childGo) == childGo;
+                // True when the converter already populated children for us — typically a
+                // PrefabInstance brings its source prefab's descendant tree along. Recursing
+                // again would inline a second copy of every Figma descendant next to the
+                // prefab's own ones. Cheaper and more reliable than PrefabUtility checks
+                // which can mis-fire on freshly-instantiated, not-yet-saved PrefabInstances.
+                bool converterAlreadyMadeChildren = childGo.transform.childCount > 0;
 
                 bool childIsComposite = ctx.CompositeContainerIds.Contains(childNode.Id);
                 if (childIsComposite)
@@ -348,7 +349,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                     AddTextOverlays(childNode, childGo, ctx, profile);
                 }
                 else if (childNode.HasChildren && childNode.NodeType != FigmaNodeType.TEXT
-                    && !isRasterized && !isMaskFrameConsumedChild && !isPrefabInstance)
+                    && !isRasterized && !isMaskFrameConsumedChild && !converterAlreadyMadeChildren)
                 {
                     ConvertChildren(childNode, childGo, ctx, profile);
                 }

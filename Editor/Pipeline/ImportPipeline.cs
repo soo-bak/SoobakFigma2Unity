@@ -843,6 +843,19 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             }
             if (!hasText || !hasVisual) return false;
 
+            // ICON-SIZE guard: composite is meant for atomic icon-like widgets where
+            // the inner elements are tightly intertwined visually (KeyHint 48x48 with
+            // overlapping ellipse + highlight + glyph). Once a container exceeds that
+            // scale it's a structural composition (row template, card, panel, button)
+            // whose inner elements should remain individually addressable. Frame 3908's
+            // 461x40 row template kept getting composite-baked because its only
+            // descendants were primitives (image RECTANGLE + dotted LINE + a small
+            // FRAME) — none INSTANCE — so the structural-instance guard below didn't
+            // fire. Threshold 100 px on max(width, height): KeyHint 48 stays composite;
+            // any 100+ px container falls through to structural processing.
+            var bb = node.AbsoluteBoundingBox;
+            if (bb != null && Mathf.Max(bb.Width, bb.Height) > 100f) return false;
+
             // STRUCTURAL-INSTANCE guard: a nested INSTANCE that's "more than a decoration"
             // must remain a PrefabInstance — baking it into the composite would silently
             // destroy its prefab linkage AND risk a text-bleed-through artefact under any

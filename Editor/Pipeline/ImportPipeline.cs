@@ -887,7 +887,57 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             // that may not have text yet (placeholder cells), (2) catches small but
             // semantically meaningful components that the size threshold misses.
             if (HasStructuralInstanceDescendant(node)) return false;
+
+            // SIDE-BY-SIDE guard: an atomic icon has its text glyph(s) sitting on
+            // top of the visuals (KeyHint's keycap glyph is centered over the
+            // ellipse + highlight). A row badge / inline label has the text NEXT TO
+            // the visuals — game_result_exp's "+12" sits to the left of the icon
+            // bubble and shares almost no horizontal extent with it. If we composite
+            // the latter, the resulting PNG is sized to the wrapper bbox (85×41),
+            // most of which is empty space where the text overlay will go, and the
+            // visual content gets crammed into the right-hand third — exactly the
+            // "image is too wide and has an unknown element on the right" symptom.
+            // Detect this case by checking whether any TEXT descendant's center
+            // falls outside the union of the decorative leaves' bboxes.
+            if (TextSitsBesideVisuals(node)) return false;
             return true;
+        }
+
+        // True when at least one TEXT descendant's center lies outside the bbox
+        // union of the decorative visual leaves — i.e. the text is positioned
+        // beside the visuals rather than overlapping them.
+        private static bool TextSitsBesideVisuals(FigmaNode container)
+        {
+            var leaves = new List<FigmaNode>();
+            CollectDecorativeLeaves(container, leaves);
+            if (leaves.Count == 0) return false;
+
+            float minX = float.MaxValue, minY = float.MaxValue;
+            float maxX = float.MinValue, maxY = float.MinValue;
+            bool any = false;
+            foreach (var leaf in leaves)
+            {
+                var b = leaf.AbsoluteBoundingBox;
+                if (b == null) continue;
+                if (b.X < minX) minX = b.X;
+                if (b.Y < minY) minY = b.Y;
+                if (b.X + b.Width  > maxX) maxX = b.X + b.Width;
+                if (b.Y + b.Height > maxY) maxY = b.Y + b.Height;
+                any = true;
+            }
+            if (!any) return false;
+
+            var texts = new List<FigmaNode>();
+            CollectTextDescendants(container, texts);
+            foreach (var t in texts)
+            {
+                var b = t.AbsoluteBoundingBox;
+                if (b == null) continue;
+                float cx = b.X + b.Width  / 2f;
+                float cy = b.Y + b.Height / 2f;
+                if (cx < minX || cx > maxX || cy < minY || cy > maxY) return true;
+            }
+            return false;
         }
 
         private static bool HasStructuralInstanceDescendant(FigmaNode container)

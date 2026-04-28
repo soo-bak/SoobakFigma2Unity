@@ -842,6 +842,18 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             var t = node.NodeType;
             if (t != FigmaNodeType.FRAME && t != FigmaNodeType.GROUP && t != FigmaNodeType.INSTANCE)
                 return false;
+
+            // ICON / DESIGNED-UNIT size guard: atomic flatten is meant for tightly-coupled
+            // visual units like icons (KeyHint 48x48) or small designed components
+            // (game_result_fail_frame 232x232 with BOOLEAN-overlapped frame parts). Once a
+            // container exceeds that scale it's almost always a layout/canvas FRAME with
+            // multiple semantic elements (bg-game_result 1344x716 background with many
+            // overlay shapes) — flattening that into one giant PNG loses every individually
+            // addressable child. Threshold 300 px on max(width, height) keeps icon-sized
+            // and small-component flattening but excludes large layout FRAMEs.
+            var bb = node.AbsoluteBoundingBox;
+            if (bb != null && Mathf.Max(bb.Width, bb.Height) > 300f) return false;
+
             foreach (var child in node.Children)
                 if (HasTextOrFrameDescendant(child))
                     return false;

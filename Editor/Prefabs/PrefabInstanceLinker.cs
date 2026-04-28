@@ -143,11 +143,18 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 // it out at convert time (visible=False, etc.); applying its override to the
                 // wrong GO would actively break the instance. Fall back to name lookup ONLY
                 // when there's no manifest at all (legacy prefabs).
+                //
+                // Compound-id stripping: a Figma INSTANCE resolves its children with compound
+                // ids like "I<instanceId>;<masterChildId>" (or deeper "I<a>;I<b>;<masterChildId>").
+                // The master prefab's manifest holds the BARE masterChildId. Strip everything
+                // up to and including the last ';' before lookup so screen-side INSTANCE child
+                // references match their prefab counterparts.
                 Transform childTransform = null;
                 if (rootManifest != null)
                 {
-                    if (!string.IsNullOrEmpty(childNode.Id))
-                        childTransform = rootManifest.FindByNodeId(childNode.Id);
+                    var lookupId = StripCompoundInstanceIdPrefix(childNode.Id);
+                    if (!string.IsNullOrEmpty(lookupId))
+                        childTransform = rootManifest.FindByNodeId(lookupId);
                     if (childTransform == null) continue; // tracked tree, not in manifest → skip
                 }
                 else
@@ -261,6 +268,20 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                     // whatever component the master extraction baked in.
                 }
             }
+        }
+
+        // A Figma INSTANCE's resolved children carry compound ids that prefix the master's
+        // bare child id with the instance(s) wrapping them, joined by ';' — e.g.
+        // "I9160:147973;7708:32996" means "the master child 7708:32996 inside the instance
+        // 9160:147973". For deeply-nested cases the prefix can repeat: "I<a>;I<b>;<masterId>".
+        // The MASTER's prefab manifest stores the bare id, so to look up the matching GO we
+        // strip everything up to and including the LAST ';'. Nodes that aren't compound (a
+        // master node converted directly) pass through unchanged.
+        private static string StripCompoundInstanceIdPrefix(string nodeId)
+        {
+            if (string.IsNullOrEmpty(nodeId)) return nodeId;
+            int lastSep = nodeId.LastIndexOf(';');
+            return lastSep < 0 ? nodeId : nodeId.Substring(lastSep + 1);
         }
     }
 }

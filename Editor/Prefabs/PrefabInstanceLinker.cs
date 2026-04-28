@@ -26,13 +26,20 @@ namespace SoobakFigma2Unity.Editor.Prefabs
         /// Try to instantiate a prefab for the given INSTANCE node.
         /// Returns the instantiated GameObject if a matching prefab was found, null otherwise.
         /// </summary>
-        public GameObject TryCreatePrefabInstance(FigmaNode instanceNode, GameObject parent, ImportContext ctx)
+        public GameObject TryCreatePrefabInstance(FigmaNode instanceNode, GameObject parent, ImportContext ctx, string componentIdOverride = null)
         {
-            if (string.IsNullOrEmpty(instanceNode.ComponentId))
+            // For an INSTANCE node the componentId is on the node itself; for a COMPONENT node
+            // (a variant of a COMPONENT_SET that we've extracted as its own prefab), the caller
+            // passes the COMPONENT's own Id as the override since that's what's keyed in
+            // ctx.GeneratedPrefabs.
+            var componentId = !string.IsNullOrEmpty(componentIdOverride)
+                ? componentIdOverride
+                : instanceNode.ComponentId;
+            if (string.IsNullOrEmpty(componentId))
                 return null;
 
             // Look up the prefab path for this component
-            if (!ctx.GeneratedPrefabs.TryGetValue(instanceNode.ComponentId, out var prefabPath))
+            if (!ctx.GeneratedPrefabs.TryGetValue(componentId, out var prefabPath))
                 return null;
 
             var prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);

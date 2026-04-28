@@ -6,6 +6,7 @@ using SoobakFigma2Unity.Editor.Mapping;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
 using SoobakFigma2Unity.Editor.Util;
+using SoobakFigma2Unity.Runtime;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
@@ -84,8 +85,11 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             var stateMapper = new SelectableStateMapper(_logger);
             stateMapper.TryApplyStates(baseGo, componentSetNode, variantNodeMap, ctx);
 
-            // Base component prefab owns the manifest; variants inherit it via prefab linkage.
-            ManifestBuilder.AttachRootManifest(baseGo, ctx);
+            // Base component prefab owns the manifest with the base variant's componentId
+            // — re-imports use this to re-find the prefab even when the file name was
+            // mangled by the user, and InstanceConverter looks up componentId → prefab via
+            // ctx.GeneratedPrefabs (populated below).
+            ManifestBuilder.AttachRootManifest(baseGo, ctx, baseVariant.ComponentId);
             var basePrefab = PrefabUtility.SaveAsPrefabAsset(baseGo, basePath);
             result[baseVariant.ComponentId] = basePath;
             ctx.GeneratedPrefabs[baseVariant.ComponentId] = basePath;
@@ -105,7 +109,14 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 var basePrefabInstance = (GameObject)PrefabUtility.InstantiatePrefab(basePrefab);
 
                 // Apply visual differences from the variant
-                ApplyOverrides(basePrefabInstance, variantGo);
+                ApplyOverrides(basePrefabInstance, variantGo, isRoot: true);
+
+                // Override the manifest's RootComponentId so the variant prefab carries its own
+                // identity rather than the base's — InstanceConverter's GeneratedPrefabs lookup
+                // and ComponentPrefabNamer.Resolve both rely on this on subsequent imports.
+                var variantManifest = basePrefabInstance.GetComponent<FigmaPrefabManifest>();
+                if (variantManifest != null)
+                    variantManifest.SetRootComponentId(variant.ComponentId);
 
                 var variantPrefab = PrefabUtility.SaveAsPrefabAsset(basePrefabInstance, variantPath);
                 result[variant.ComponentId] = variantPath;
@@ -131,9 +142,9 @@ namespace SoobakFigma2Unity.Editor.Prefabs
         /// instead of forcing them into a Variant chain, or (b) clone via SerializedObject
         /// so the prefab payload stays save-safe — both deferred to a follow-up pass.
         /// </summary>
-        private void ApplyOverrides(GameObject target, GameObject source)
+        private void ApplyOverrides(GameObject target, GameObject source, bool isRoot)
         {
-            ApplyComponentOverrides(target, source);
+            ApplyComponentOverrides(target, source, isRoot);
 
             var targetChildren = new Dictionary<string, Transform>();
             for (int i = 0; i < target.transform.childCount; i++)
@@ -153,7 +164,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 var sourceChild = source.transform.GetChild(i);
                 if (targetChildren.TryGetValue(sourceChild.name, out var targetChild))
                 {
-                    ApplyOverrides(targetChild.gameObject, sourceChild.gameObject);
+                    ApplyOverrides(targetChild.gameObject, sourceChild.gameObject, isRoot: false);
                 }
                 else
                 {
@@ -168,23 +179,24 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             }
         }
 
-        private void ApplyComponentOverrides(GameObject target, GameObject source)
+        private void ApplyComponentOverrides(GameObject target, GameObject source, bool isRoot)
         {
-            // RectTransform — full sync. The previous version only copied sizeDelta,
-            // which left every variant inheriting the base's anchors/pivot/position
-            // and produced visually wrong results for variants that moved or re-anchored
-            // their children (which is most of them in real design systems).
+            // RectTransform — only the variant ROOT's sizeDelta is overridden (variants like
+            // size=XL vs size=S genuinely have different root sizes). For child RTs we leave
+            // base's values alone — the variant's child RTs get re-derived from a fresh
+            // conversion pass that runs without the LayoutGroup having applied yet, so they
+            // carry stale (0,0,0,0) collapse values from AutoLayoutMapper's pre-layout
+            // defaults. Copying those into the prefab variant as overrides was the source of
+            // the "every child collapsed at origin" visual breakage. The base prefab's saved
+            // state already reflects the correct layout (LayoutGroup ran before its save), and
+            // the variant inherits that layout via the prefab variant link — exactly what we
+            // want for size-only / property-only variants. Genuinely structural variants (rare
+            // in practice) should be promoted to independent prefabs instead.
             var targetRt = target.GetComponent<RectTransform>();
             var sourceRt = source.GetComponent<RectTransform>();
-            if (targetRt != null && sourceRt != null)
+            if (isRoot && targetRt != null && sourceRt != null)
             {
-                if (targetRt.anchorMin       != sourceRt.anchorMin)       targetRt.anchorMin       = sourceRt.anchorMin;
-                if (targetRt.anchorMax       != sourceRt.anchorMax)       targetRt.anchorMax       = sourceRt.anchorMax;
-                if (targetRt.pivot           != sourceRt.pivot)           targetRt.pivot           = sourceRt.pivot;
-                if (targetRt.sizeDelta       != sourceRt.sizeDelta)       targetRt.sizeDelta       = sourceRt.sizeDelta;
-                if (targetRt.anchoredPosition != sourceRt.anchoredPosition) targetRt.anchoredPosition = sourceRt.anchoredPosition;
-                if (targetRt.localRotation   != sourceRt.localRotation)   targetRt.localRotation   = sourceRt.localRotation;
-                if (targetRt.localScale      != sourceRt.localScale)      targetRt.localScale      = sourceRt.localScale;
+                if (targetRt.sizeDelta != sourceRt.sizeDelta) targetRt.sizeDelta = sourceRt.sizeDelta;
             }
 
             // Image — sprite, color, plus type/preserveAspect/fillCenter so 9-slice
@@ -237,6 +249,32 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 if (!Mathf.Approximately(targetLe.flexibleWidth,   sourceLe.flexibleWidth))   targetLe.flexibleWidth   = sourceLe.flexibleWidth;
                 if (!Mathf.Approximately(targetLe.flexibleHeight,  sourceLe.flexibleHeight))  targetLe.flexibleHeight  = sourceLe.flexibleHeight;
             }
+
+            // HorizontalLayoutGroup / VerticalLayoutGroup — padding and item spacing.
+            // Variants of a button often differ in padding (size=XL has wider padding than
+            // size=S); since we no longer override child RTs, we rely on the LayoutGroup to
+            // re-distribute children when padding/spacing change.
+            var targetHlg = target.GetComponent<HorizontalLayoutGroup>();
+            var sourceHlg = source.GetComponent<HorizontalLayoutGroup>();
+            if (targetHlg != null && sourceHlg != null)
+                CopyLayoutGroupTunables(targetHlg, sourceHlg);
+            var targetVlg = target.GetComponent<VerticalLayoutGroup>();
+            var sourceVlg = source.GetComponent<VerticalLayoutGroup>();
+            if (targetVlg != null && sourceVlg != null)
+                CopyLayoutGroupTunables(targetVlg, sourceVlg);
+        }
+
+        private static void CopyLayoutGroupTunables(HorizontalOrVerticalLayoutGroup target, HorizontalOrVerticalLayoutGroup source)
+        {
+            if (!RectOffsetEquals(target.padding, source.padding))
+                target.padding = new RectOffset(source.padding.left, source.padding.right, source.padding.top, source.padding.bottom);
+            if (!Mathf.Approximately(target.spacing, source.spacing)) target.spacing = source.spacing;
+            if (target.childAlignment != source.childAlignment)       target.childAlignment = source.childAlignment;
+        }
+
+        private static bool RectOffsetEquals(RectOffset a, RectOffset b)
+        {
+            return a.left == b.left && a.right == b.right && a.top == b.top && a.bottom == b.bottom;
         }
 
         /// <summary>

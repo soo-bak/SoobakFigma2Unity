@@ -70,6 +70,7 @@ namespace SoobakFigma2Unity.Editor.Mapping
             {
                 if (exists && mode == MergeMode.FullReplace)
                     MergeBackup.CreateSnapshot(assetPath, ctx.Profile?.BackupRetentionCount ?? 5);
+                StripNestedPrefabInstanceChildRectOverrides(newRoot);
                 PrefabUtility.SaveAsPrefabAsset(newRoot, assetPath);
                 return assetPath;
             }
@@ -96,6 +97,7 @@ namespace SoobakFigma2Unity.Editor.Mapping
                 {
                     // Legacy prefab (no manifest) — can't safely merge. Full replace and log.
                     logger?.Warn($"{assetPath}: existing prefab has no FigmaPrefabManifest; treating as FullReplace (first merge-capable import).");
+                    StripNestedPrefabInstanceChildRectOverrides(newRoot);
                     PrefabUtility.SaveAsPrefabAsset(newRoot, assetPath);
                     return assetPath;
                 }
@@ -117,6 +119,7 @@ namespace SoobakFigma2Unity.Editor.Mapping
                     AssetDatabase.StopAssetEditing();
                 }
 
+                StripNestedPrefabInstanceChildRectOverrides(existing);
                 PrefabUtility.SaveAsPrefabAsset(existing, assetPath);
                 logger?.Success($"Smart-merged prefab: {assetPath}");
             }
@@ -338,6 +341,45 @@ namespace SoobakFigma2Unity.Editor.Mapping
             var stack = new Stack<string>();
             while (t != null) { stack.Push(t.name); t = t.parent; }
             return string.Join("/", stack);
+        }
+
+        // Walks the tree and reverts every prefab-instance override on child RectTransforms
+        // (everything except the PrefabInstance ROOT). When InstanceConverter creates nested
+        // PrefabInstances for COMPONENT/INSTANCE Figma nodes, Unity's automatic LayoutGroup
+        // pass on the freshly-instantiated prefab writes (0,0,0,0) into every LayoutGroup-
+        // managed child RT. SaveAsPrefabAsset captures those as overrides on the screen
+        // prefab, collapsing every variant's children to the origin and overlapping the
+        // visuals. We didn't intend to override any child RT — they should inherit from the
+        // source prefab. Reverting them on the LIVE component (via SerializedObject) makes
+        // the subsequent diff produce no override entries for those child RTs.
+        private static void StripNestedPrefabInstanceChildRectOverrides(GameObject root)
+        {
+            if (root == null) return;
+            // Find every PrefabInstance root in the tree (a Transform whose
+            // GetCorrespondingObjectFromSource returns a non-null asset reference and which
+            // is itself the closest PrefabInstance ancestor of itself).
+            var allTransforms = root.GetComponentsInChildren<Transform>(includeInactive: true);
+            foreach (var t in allTransforms)
+            {
+                if (t == null) continue;
+                var go = t.gameObject;
+                var instanceRoot = PrefabUtility.GetNearestPrefabInstanceRoot(go);
+                if (instanceRoot != go) continue; // only the prefab-instance root itself
+
+                var rootRt = go.GetComponent<RectTransform>();
+                var childRts = go.GetComponentsInChildren<RectTransform>(includeInactive: true);
+                foreach (var rt in childRts)
+                {
+                    if (rt == null || rt == rootRt) continue;
+                    var so = new SerializedObject(rt);
+                    var prop = so.GetIterator();
+                    while (prop.NextVisible(enterChildren: true))
+                    {
+                        if (prop.prefabOverride)
+                            PrefabUtility.RevertPropertyOverride(prop, InteractionMode.AutomatedAction);
+                    }
+                }
+            }
         }
 
     }

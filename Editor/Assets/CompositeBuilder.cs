@@ -55,7 +55,8 @@ namespace SoobakFigma2Unity.Editor.Assets
                 if (!downloadedPngPaths.TryGetValue(leaf.Id, out var leafPath)) continue;
                 if (string.IsNullOrEmpty(leafPath) || !File.Exists(leafPath)) continue;
 
-                rasterBoundsModes?.TryGetValue(leaf.Id, out var boundsMode);
+                var boundsMode = ImportContext.RasterBoundsMode.AbsoluteBounds;
+                rasterBoundsModes?.TryGetValue(leaf.Id, out boundsMode);
                 if (BlitLeaf(leaf, container, leafPath, boundsMode, canvasPixels, width, height, scale))
                     blittedCount++;
             }

@@ -42,7 +42,6 @@ namespace SoobakFigma2Unity.Editor.Window
         private static readonly float[] ScaleValues = { 1f, 2f, 3f, 4f };
         private int _scaleIndex = 1;
 
-        private static readonly string[] ModeLabels = { "Components Only", "Screen Only", "Screen + Components" };
         private static readonly string[] ColorSpaceLabels = { "Auto Detect", "Linear", "Gamma" };
 
         private void OnEnable()
@@ -84,7 +83,6 @@ namespace SoobakFigma2Unity.Editor.Window
             if (_showAdvanced)
             {
                 EditorGUI.indentLevel++;
-                DrawImportModeSection();
                 DrawImageSection();
                 DrawOutputSection();
                 DrawLayoutSection();
@@ -132,16 +130,6 @@ namespace SoobakFigma2Unity.Editor.Window
         {
             EditorGUILayout.LabelField("Frame Selection", EditorStyles.boldLabel);
             _treeView.OnGUI(180);
-            EditorGUILayout.Space(8);
-        }
-
-        // ─── Import Mode ────────────────────────────────
-        private void DrawImportModeSection()
-        {
-            EditorGUILayout.LabelField("Import Mode", EditorStyles.boldLabel);
-            EditorGUI.indentLevel++;
-            _profile.Mode = (ImportMode)GUILayout.SelectionGrid((int)_profile.Mode, ModeLabels, 1, EditorStyles.radioButton);
-            EditorGUI.indentLevel--;
             EditorGUILayout.Space(8);
         }
 

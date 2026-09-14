@@ -28,11 +28,41 @@ namespace SoobakFigma2Unity.Runtime.URP
     ///                  Walks every renderer whose shader carries the
     ///                  "SoobakColorBlend" tag and draws it with _UISceneColor
     ///                  bound, producing a correct one-frame, single-pass blend.
+    ///
+    /// Both passes are skipped unless a chroma-blend material is actually loaded.
+    /// DrawPass only sees MeshRenderer / SkinnedMeshRenderer entries in cullResults;
+    /// UGUI CanvasRenderer never appears there, so an unused install must not blit
+    /// every camera.
     /// </summary>
     public sealed class UISceneColorCopyFeature : ScriptableRendererFeature
     {
+        internal static readonly ShaderTagId ColorBlendTagId = new ShaderTagId("SoobakColorBlend");
+
+        private static readonly string[] ColorBlendShaderNames =
+        {
+            "SoobakFigma2Unity/URP/BlendColor",
+            "SoobakFigma2Unity/URP/BlendHue",
+            "SoobakFigma2Unity/URP/BlendSaturation",
+            "SoobakFigma2Unity/URP/BlendDarken",
+            "SoobakFigma2Unity/URP/BlendLighten",
+        };
+
+        private const int OccupancyRefreshInterval = 30;
+
+        private static Shader[] _colorBlendShaders;
+        private static int _occupancyFrame = int.MinValue;
+        private static bool _hasLoadedBlendMaterial;
+
         private CopyPass _copyPass;
         private DrawPass _drawPass;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState()
+        {
+            _colorBlendShaders = null;
+            _occupancyFrame = int.MinValue;
+            _hasLoadedBlendMaterial = false;
+        }
 
         public override void Create()
         {
@@ -48,15 +78,75 @@ namespace SoobakFigma2Unity.Runtime.URP
 
         public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
         {
-            if (renderingData.cameraData.cameraType == CameraType.Preview) return;
+            if (!ShouldEnqueue(renderingData.cameraData.cameraType))
+                return;
+
             renderer.EnqueuePass(_copyPass);
             renderer.EnqueuePass(_drawPass);
+        }
+
+        private static bool ShouldEnqueue(CameraType cameraType)
+        {
+            if (cameraType == CameraType.Preview || cameraType == CameraType.Reflection)
+                return false;
+
+            return HasLoadedColorBlendMaterial();
+        }
+
+        private static bool HasLoadedColorBlendMaterial()
+        {
+            int frame = Time.renderedFrameCount;
+            if (_occupancyFrame != int.MinValue && frame - _occupancyFrame < OccupancyRefreshInterval)
+                return _hasLoadedBlendMaterial;
+
+            _occupancyFrame = frame;
+            _hasLoadedBlendMaterial = ScanLoadedColorBlendMaterials();
+            return _hasLoadedBlendMaterial;
+        }
+
+        private static bool ScanLoadedColorBlendMaterials()
+        {
+            var shaders = GetColorBlendShaders();
+            if (shaders.Length == 0)
+                return false;
+
+            var materials = Resources.FindObjectsOfTypeAll<Material>();
+            for (int i = 0; i < materials.Length; i++)
+            {
+                var shader = materials[i] != null ? materials[i].shader : null;
+                if (shader == null)
+                    continue;
+
+                for (int s = 0; s < shaders.Length; s++)
+                {
+                    if (shader == shaders[s])
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static Shader[] GetColorBlendShaders()
+        {
+            if (_colorBlendShaders != null)
+                return _colorBlendShaders;
+
+            var found = new List<Shader>(ColorBlendShaderNames.Length);
+            for (int i = 0; i < ColorBlendShaderNames.Length; i++)
+            {
+                var shader = Shader.Find(ColorBlendShaderNames[i]);
+                if (shader != null)
+                    found.Add(shader);
+            }
+
+            _colorBlendShaders = found.ToArray();
+            return _colorBlendShaders;
         }
 
         private sealed class CopyPass : ScriptableRenderPass
         {
             private static readonly int GlobalTexId = Shader.PropertyToID("_UISceneColor");
-            private static bool _firstFireLogged;
 
             private class PassData
             {
@@ -65,14 +155,11 @@ namespace SoobakFigma2Unity.Runtime.URP
 
             public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
             {
+                if (!HasLoadedColorBlendMaterial())
+                    return;
+
                 var resourceData = frameData.Get<UniversalResourceData>();
                 if (!resourceData.activeColorTexture.IsValid()) return;
-
-                if (!_firstFireLogged)
-                {
-                    _firstFireLogged = true;
-                    Debug.Log("[SoobakFigma2Unity] CopyPass fired — _UISceneColor will be bound.");
-                }
 
                 var desc = renderGraph.GetTextureDesc(resourceData.activeColorTexture);
                 desc.name = "_UISceneColor";
@@ -100,12 +187,7 @@ namespace SoobakFigma2Unity.Runtime.URP
 
         private sealed class DrawPass : ScriptableRenderPass
         {
-            // Must match the LightMode tag declared in URPBlendColor.shader.
-            // Renderers whose shader pass carries this tag are excluded from
-            // URP's default transparent pass and drawn here instead.
-            private static readonly ShaderTagId TagId = new ShaderTagId("SoobakColorBlend");
-            private static readonly List<ShaderTagId> TagList = new List<ShaderTagId> { TagId };
-            private static bool _firstFireLogged;
+            private static readonly List<ShaderTagId> TagList = new List<ShaderTagId> { ColorBlendTagId };
 
             private class PassData
             {
@@ -114,18 +196,15 @@ namespace SoobakFigma2Unity.Runtime.URP
 
             public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
             {
+                if (!HasLoadedColorBlendMaterial())
+                    return;
+
                 var resourceData = frameData.Get<UniversalResourceData>();
                 var cameraData = frameData.Get<UniversalCameraData>();
                 var renderingData = frameData.Get<UniversalRenderingData>();
                 var lightData = frameData.Get<UniversalLightData>();
 
                 if (!resourceData.activeColorTexture.IsValid()) return;
-
-                if (!_firstFireLogged)
-                {
-                    _firstFireLogged = true;
-                    Debug.Log("[SoobakFigma2Unity] DrawPass fired — color-blend renderers will be drawn.");
-                }
 
                 var sortingCriteria = SortingCriteria.CommonTransparent;
                 var drawingSettings = RenderingUtils.CreateDrawingSettings(
@@ -141,7 +220,7 @@ namespace SoobakFigma2Unity.Runtime.URP
                     passData.rendererList = renderGraph.CreateRendererList(rendererListParams);
                     builder.UseRendererList(passData.rendererList);
                     builder.SetRenderAttachment(resourceData.activeColorTexture, 0, AccessFlags.Write);
-                    builder.AllowPassCulling(false);
+                    builder.AllowPassCulling(true);
 
                     builder.SetRenderFunc<PassData>((data, context) =>
                     {

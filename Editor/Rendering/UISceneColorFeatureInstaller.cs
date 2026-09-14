@@ -66,9 +66,19 @@ namespace SoobakFigma2Unity.Editor.URP
             int removed = 0;
             foreach (var rd in rendererDatas)
             {
-                if (TryRemoveFeature(rd))
-                    removed++;
+                try
+                {
+                    if (TryRemoveFeature(rd, save: false))
+                        removed++;
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"[SoobakFigma2Unity] Remove failed on '{rd.name}': {e}");
+                }
             }
+
+            if (removed > 0)
+                AssetDatabase.SaveAssets();
 
             Debug.Log("[SoobakFigma2Unity] URP Color-blend feature remove: " +
                       $"{removed} renderer(s) cleaned, {rendererDatas.Count} project renderer(s) checked.");
@@ -141,7 +151,7 @@ namespace SoobakFigma2Unity.Editor.URP
             added = false;
             if (rd == null) return false;
 
-            if (rd.rendererFeatures.Any(f => f is UISceneColorCopyFeature))
+            if (HasColorCopyFeature(rd))
                 return true;
 
             var feature = ScriptableObject.CreateInstance<UISceneColorCopyFeature>();
@@ -182,9 +192,82 @@ namespace SoobakFigma2Unity.Editor.URP
             return true;
         }
 
-        private static bool TryRemoveFeature(ScriptableRendererData rd)
+        private static bool HasColorCopyFeature(ScriptableRendererData rd)
+        {
+            try
+            {
+                if (rd.rendererFeatures != null &&
+                    rd.rendererFeatures.Any(f => f is UISceneColorCopyFeature))
+                    return true;
+            }
+            catch (Exception)
+            {
+            }
+
+            return CollectColorCopySubAssets(rd).Count > 0;
+        }
+
+        private static List<UnityEngine.Object> CollectColorCopySubAssets(ScriptableRendererData rd)
+        {
+            var found = new List<UnityEngine.Object>();
+            var path = AssetDatabase.GetAssetPath(rd);
+            if (string.IsNullOrEmpty(path))
+                return found;
+
+            foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(path))
+            {
+                if (asset == null || asset == rd)
+                    continue;
+                if (asset is UISceneColorCopyFeature || asset.name == FeatureObjectName)
+                    found.Add(asset);
+            }
+
+            return found;
+        }
+
+        private static bool TryGetObjectReference(SerializedProperty element, out UnityEngine.Object obj)
+        {
+            obj = null;
+            if (element == null)
+                return false;
+
+            try
+            {
+                obj = element.objectReferenceValue;
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static int TryGetInstanceId(SerializedProperty element)
+        {
+            if (element == null)
+                return 0;
+
+            try
+            {
+                return element.objectReferenceInstanceIDValue;
+            }
+            catch (Exception)
+            {
+                return 0;
+            }
+        }
+
+        private static bool TryRemoveFeature(ScriptableRendererData rd, bool save = true)
         {
             if (rd == null) return false;
+
+            var doomed = CollectColorCopySubAssets(rd);
+            var doomedIds = new HashSet<int>();
+            foreach (var asset in doomed)
+            {
+                if (asset != null)
+                    doomedIds.Add(asset.GetInstanceID());
+            }
 
             var so = new SerializedObject(rd);
             so.Update();
@@ -193,26 +276,47 @@ namespace SoobakFigma2Unity.Editor.URP
             if (featuresProp == null)
                 return false;
 
-            var doomed = new List<UISceneColorCopyFeature>();
-            bool removed = false;
-            for (int i = featuresProp.arraySize - 1; i >= 0; i--)
+            var keepObjects = new List<UnityEngine.Object>();
+            var keepMaps = new List<long>();
+            bool removed = doomed.Count > 0;
+
+            for (int i = 0; i < featuresProp.arraySize; i++)
             {
-                var feature = featuresProp.GetArrayElementAtIndex(i).objectReferenceValue as UISceneColorCopyFeature;
-                if (feature == null)
+                var element = featuresProp.GetArrayElementAtIndex(i);
+                var readable = TryGetObjectReference(element, out var obj);
+                var instanceId = TryGetInstanceId(element);
+                var mapId = featureMapProp != null && i < featureMapProp.arraySize
+                    ? featureMapProp.GetArrayElementAtIndex(i).longValue
+                    : 0L;
+
+                bool drop = (readable && obj is UISceneColorCopyFeature) ||
+                            (readable && obj != null && doomedIds.Contains(obj.GetInstanceID())) ||
+                            doomedIds.Contains(instanceId) ||
+                            (!readable && doomed.Count > 0);
+
+                if (drop)
+                {
+                    removed = true;
                     continue;
+                }
 
-                // Object-reference arrays null on the first delete and shrink on the second.
-                featuresProp.GetArrayElementAtIndex(i).objectReferenceValue = null;
-                featuresProp.DeleteArrayElementAtIndex(i);
-                if (featureMapProp != null && i < featureMapProp.arraySize)
-                    featureMapProp.DeleteArrayElementAtIndex(i);
-
-                doomed.Add(feature);
-                removed = true;
+                keepObjects.Add(obj);
+                keepMaps.Add(mapId);
             }
 
             if (!removed)
                 return false;
+
+            featuresProp.arraySize = keepObjects.Count;
+            if (featureMapProp != null)
+                featureMapProp.arraySize = keepMaps.Count;
+
+            for (int i = 0; i < keepObjects.Count; i++)
+            {
+                featuresProp.GetArrayElementAtIndex(i).objectReferenceValue = keepObjects[i];
+                if (featureMapProp != null)
+                    featureMapProp.GetArrayElementAtIndex(i).longValue = keepMaps[i];
+            }
 
             so.ApplyModifiedPropertiesWithoutUndo();
             foreach (var feature in doomed)
@@ -222,7 +326,8 @@ namespace SoobakFigma2Unity.Editor.URP
             }
 
             EditorUtility.SetDirty(rd);
-            AssetDatabase.SaveAssets();
+            if (save)
+                AssetDatabase.SaveAssets();
             return true;
         }
     }

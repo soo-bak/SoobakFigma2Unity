@@ -56,6 +56,14 @@ namespace SoobakFigma2Unity.Editor.URP
         [MenuItem(RemoveMenuPath)]
         private static void ManualRemove()
         {
+            // Menu clicks run inside GUI/render. Mutating live URP renderer
+            // features and SaveAssets here can native-crash on the following
+            // domain reload (BackupAndDeflateAll of m_RendererFeatures).
+            EditorApplication.delayCall += RemoveDeferred;
+        }
+
+        private static void RemoveDeferred()
+        {
             var rendererDatas = FindAllProjectRendererData();
             if (rendererDatas.Count == 0)
             {
@@ -64,24 +72,44 @@ namespace SoobakFigma2Unity.Editor.URP
             }
 
             int removed = 0;
-            foreach (var rd in rendererDatas)
+            var doomed = new List<UnityEngine.Object>();
+            AssetDatabase.StartAssetEditing();
+            try
             {
-                try
+                foreach (var rd in rendererDatas)
                 {
-                    if (TryRemoveFeature(rd, save: false))
-                        removed++;
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError($"[SoobakFigma2Unity] Remove failed on '{rd.name}': {e}");
+                    try
+                    {
+                        if (TryUnlinkFeature(rd, doomed))
+                            removed++;
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogError($"[SoobakFigma2Unity] Remove failed on '{rd.name}': {e}");
+                    }
                 }
             }
+            finally
+            {
+                AssetDatabase.StopAssetEditing();
+            }
 
-            if (removed > 0)
-                AssetDatabase.SaveAssets();
+            // Destroy after the serialized lists no longer reference the features,
+            // and not during the same GUI/render tick as the menu click.
+            EditorApplication.delayCall += () =>
+            {
+                foreach (var feature in doomed)
+                {
+                    if (feature != null)
+                        UnityEngine.Object.DestroyImmediate(feature, true);
+                }
 
-            Debug.Log("[SoobakFigma2Unity] URP Color-blend feature remove: " +
-                      $"{removed} renderer(s) cleaned, {rendererDatas.Count} project renderer(s) checked.");
+                if (removed > 0)
+                    AssetDatabase.SaveAssets();
+
+                Debug.Log("[SoobakFigma2Unity] URP Color-blend feature remove: " +
+                          $"{removed} renderer(s) cleaned, {rendererDatas.Count} project renderer(s) checked.");
+            };
         }
 
         private static List<ScriptableRendererData> FindActivePipelineRendererData()
@@ -216,9 +244,7 @@ namespace SoobakFigma2Unity.Editor.URP
 
             foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(path))
             {
-                if (asset == null || asset == rd)
-                    continue;
-                if (asset is UISceneColorCopyFeature || asset.name == FeatureObjectName)
+                if (asset is UISceneColorCopyFeature)
                     found.Add(asset);
             }
 
@@ -257,13 +283,13 @@ namespace SoobakFigma2Unity.Editor.URP
             }
         }
 
-        private static bool TryRemoveFeature(ScriptableRendererData rd, bool save = true)
+        private static bool TryUnlinkFeature(ScriptableRendererData rd, List<UnityEngine.Object> doomed)
         {
             if (rd == null) return false;
 
-            var doomed = CollectColorCopySubAssets(rd);
+            var ours = CollectColorCopySubAssets(rd);
             var doomedIds = new HashSet<int>();
-            foreach (var asset in doomed)
+            foreach (var asset in ours)
             {
                 if (asset != null)
                     doomedIds.Add(asset.GetInstanceID());
@@ -276,59 +302,44 @@ namespace SoobakFigma2Unity.Editor.URP
             if (featuresProp == null)
                 return false;
 
-            var keepObjects = new List<UnityEngine.Object>();
-            var keepMaps = new List<long>();
-            bool removed = doomed.Count > 0;
-
-            for (int i = 0; i < featuresProp.arraySize; i++)
+            bool removed = false;
+            for (int i = featuresProp.arraySize - 1; i >= 0; i--)
             {
                 var element = featuresProp.GetArrayElementAtIndex(i);
-                var readable = TryGetObjectReference(element, out var obj);
-                var instanceId = TryGetInstanceId(element);
-                var mapId = featureMapProp != null && i < featureMapProp.arraySize
-                    ? featureMapProp.GetArrayElementAtIndex(i).longValue
-                    : 0L;
-
-                bool drop = (readable && obj is UISceneColorCopyFeature) ||
-                            (readable && obj != null && doomedIds.Contains(obj.GetInstanceID())) ||
-                            doomedIds.Contains(instanceId) ||
-                            (!readable && doomed.Count > 0);
-
-                if (drop)
-                {
-                    removed = true;
+                if (!IsOurFeatureSlot(element, doomedIds))
                     continue;
-                }
 
-                keepObjects.Add(obj);
-                keepMaps.Add(mapId);
+                try
+                {
+                    element.objectReferenceValue = null;
+                    featuresProp.DeleteArrayElementAtIndex(i);
+                    if (featureMapProp != null && i < featureMapProp.arraySize)
+                        featureMapProp.DeleteArrayElementAtIndex(i);
+                    removed = true;
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[SoobakFigma2Unity] Could not unlink Color-blend Feature slot {i} on '{rd.name}': {e.Message}");
+                }
             }
 
-            if (!removed)
+            if (!removed && ours.Count == 0)
                 return false;
 
-            featuresProp.arraySize = keepObjects.Count;
-            if (featureMapProp != null)
-                featureMapProp.arraySize = keepMaps.Count;
-
-            for (int i = 0; i < keepObjects.Count; i++)
-            {
-                featuresProp.GetArrayElementAtIndex(i).objectReferenceValue = keepObjects[i];
-                if (featureMapProp != null)
-                    featureMapProp.GetArrayElementAtIndex(i).longValue = keepMaps[i];
-            }
-
             so.ApplyModifiedPropertiesWithoutUndo();
-            foreach (var feature in doomed)
-            {
-                if (feature != null)
-                    UnityEngine.Object.DestroyImmediate(feature, true);
-            }
-
+            rd.SetDirty();
             EditorUtility.SetDirty(rd);
-            if (save)
-                AssetDatabase.SaveAssets();
+            doomed.AddRange(ours);
             return true;
+        }
+
+        private static bool IsOurFeatureSlot(SerializedProperty element, HashSet<int> doomedIds)
+        {
+            if (TryGetObjectReference(element, out var obj) && obj is UISceneColorCopyFeature)
+                return true;
+
+            var instanceId = TryGetInstanceId(element);
+            return instanceId != 0 && doomedIds.Contains(instanceId);
         }
     }
 }

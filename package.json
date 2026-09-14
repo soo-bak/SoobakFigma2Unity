@@ -1,6 +1,6 @@
 {
   "name": "com.soobak.figma2unity",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "SoobakFigma2Unity",
   "description": "Convert Figma designs to Unity UGUI prefabs with high accuracy.",
   "unity": "6000.0",

@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using TMPro;
+
 namespace SoobakFigma2Unity.Editor.Settings
 {
     public enum ColorSpaceMode
@@ -37,6 +40,10 @@ namespace SoobakFigma2Unity.Editor.Settings
         public float ImageScale = 2f;
         public bool AutoNineSlice = true;
         public bool SolidColorOptimization = true;
+
+        // Text
+        public List<TMP_FontAsset> FontAssets = new List<TMP_FontAsset>();
+        public bool ImportBoldFromFigma = false;
 
         // Layout
         public bool ConvertAutoLayout = true;

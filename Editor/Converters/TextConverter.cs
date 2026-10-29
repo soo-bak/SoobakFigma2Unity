@@ -25,13 +25,15 @@ namespace SoobakFigma2Unity.Editor.Converters
 
             // Font style
             var style = node.Style;
+            tmp.font = FontResolver.Resolve(style, ctx.Profile.FontAssets);
             if (style != null)
             {
                 tmp.fontSize = style.FontSize;
 
                 // Font style (bold/italic)
                 FontStyles fontStyles = FontStyles.Normal;
-                if (style.FontWeight >= 700) fontStyles |= FontStyles.Bold;
+                if (ctx.Profile.ImportBoldFromFigma && style.FontWeight >= 700)
+                    fontStyles |= FontStyles.Bold;
                 if (style.Italic) fontStyles |= FontStyles.Italic;
                 tmp.fontStyle = fontStyles;
 
@@ -80,7 +82,8 @@ namespace SoobakFigma2Unity.Editor.Converters
                 // Log font info for manual mapping
                 if (!string.IsNullOrEmpty(style.FontFamily))
                 {
-                    ctx.Logger.Info($"{node.Name}: font={style.FontFamily}, weight={style.FontWeight}");
+                    ctx.Logger.Info(
+                        $"{node.Name}: font={style.FontFamily}, weight={style.FontWeight} -> {tmp.font?.name ?? "TMP default"}");
                 }
             }
 

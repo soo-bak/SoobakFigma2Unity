@@ -26,6 +26,9 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         /// the editor window to enable "Undo Last Import".</summary>
         public List<string> SavedPrefabPaths { get; } = new List<string>();
 
+        /// <summary>The first selected top-level frame prefab written by the import.</summary>
+        public string PrimaryPrefabPath { get; private set; }
+
         public ImportPipeline(ImportLogger logger)
         {
             _logger = logger;
@@ -177,6 +180,8 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
         private void GenerateAndConvert(List<FigmaNode> frames, ImportContext ctx, ImportProfile profile)
         {
+            ComponentPrefabNamer.BuildProjectPrefabIndex(profile, ctx);
+
             // Always run the full pipeline: extract every Figma COMPONENT referenced by the
             // imported screens as a standalone prefab in ComponentOutputPath, then write
             // each screen frame so its INSTANCEs link back as PrefabInstances.
@@ -228,7 +233,11 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 ConvertChildren(frameNode, rootGo, ctx, profile);
 
             var prefabPath = PrefabMerger.MergeOrSave(rootGo, profile.ScreenOutputPath, frameNode.Name, ctx, profile.MergeMode, _logger);
-            if (!string.IsNullOrEmpty(prefabPath)) SavedPrefabPaths.Add(prefabPath);
+            if (!string.IsNullOrEmpty(prefabPath))
+            {
+                SavedPrefabPaths.Add(prefabPath);
+                PrimaryPrefabPath ??= prefabPath;
+            }
             _logger.Success($"Saved prefab: {prefabPath}");
             Object.DestroyImmediate(rootGo);
         }
@@ -606,9 +615,21 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             // across re-imports.
             var allocator = new AssetNameAllocator(imageDir);
             allocator.PreloadDirectory();
+            var reusableNames = ctx.NodeImagePaths.Keys
+                .Select(nodeId => ResolveNodeName(ctx, nodeId))
+                .ToList();
+            foreach (var imageRef in ctx.FillImagePaths.Keys)
+            {
+                ctx.ImageFillNameHints.TryGetValue(imageRef, out var hintName);
+                reusableNames.Add("fill_" + (string.IsNullOrEmpty(hintName) ? imageRef : hintName));
+            }
+            allocator.PreloadReusableProjectSprites(reusableNames);
 
             var nodeToAsset = new Dictionary<string, string>();
             var fillToAsset = new Dictionary<string, string>();
+            // Existing project sprites are references, not converter-owned output.
+            // Never rewrite their importer settings or 9-slice borders.
+            var preservedAssetPaths = new HashSet<string>();
             // Tracks asset paths we just wrote (or just claimed for the first time this
             // run). Only these strictly need a copy step — pre-existing on-disk files
             // with matching content can skip it.
@@ -623,7 +644,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             {
                 var sourcePath = ctx.NodeImagePaths[nodeId];
                 AllocateAndCopy(sourcePath, ResolveNodeName(ctx, nodeId), allocator,
-                    copiedPaths, out var assetPath);
+                    copiedPaths, preservedAssetPaths, out var assetPath);
                 if (!string.IsNullOrEmpty(assetPath))
                     nodeToAsset[nodeId] = assetPath;
             }
@@ -636,15 +657,14 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 ctx.ImageFillNameHints.TryGetValue(imageRef, out var hintName);
                 if (string.IsNullOrEmpty(hintName)) hintName = imageRef;
                 AllocateAndCopy(sourcePath, "fill_" + hintName, allocator,
-                    copiedPaths, out var assetPath);
+                    copiedPaths, preservedAssetPaths, out var assetPath);
                 if (!string.IsNullOrEmpty(assetPath))
                     fillToAsset[imageRef] = assetPath;
             }
 
-            // Run BatchImport over EVERY referenced asset path — including ones that were
-            // already on disk before this run — so importer settings stay in sync with
-            // the current ImageScale / AutoNineSlice profile, and Sprite refs are re-loaded
-            // fresh into ctx.NodeSprites.
+            // Converter-owned assets stay in sync with the current import profile.
+            // Existing project sprites are loaded as-is so the converter cannot overwrite
+            // their PPU, compression, mesh, or carefully-authored 9-slice settings.
             var allReferencedPaths = new HashSet<string>(nodeToAsset.Values);
             foreach (var p in fillToAsset.Values) allReferencedPaths.Add(p);
             if (allReferencedPaths.Count == 0) return;
@@ -652,9 +672,19 @@ namespace SoobakFigma2Unity.Editor.Pipeline
             _logger.Info($"Image dedup: {totalDownloads} downloaded → " +
                          $"{allReferencedPaths.Count} unique sprites " +
                          $"({allocator.DeduplicatedCount} duplicates collapsed, " +
+                         $"{allocator.ReusedProjectAssetCount} project sprites reused, " +
                          $"{copiedPaths.Count} new files written).");
 
-            var sprites = ImageImporter.BatchImport(allReferencedPaths.ToList(), profile.ImageScale);
+            var ownedAssetPaths = allReferencedPaths
+                .Where(path => !preservedAssetPaths.Contains(path))
+                .ToList();
+            var sprites = ImageImporter.BatchImport(ownedAssetPaths, profile.ImageScale);
+            foreach (var assetPath in preservedAssetPaths)
+            {
+                var sprite = AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
+                if (sprite != null)
+                    sprites[assetPath] = sprite;
+            }
 
             // 9-slice borders: derived from the source node's geometry. Multiple node IDs
             // can share an asset path after dedup, so detect-and-apply borders once per
@@ -668,6 +698,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 if (!sprites.TryGetValue(kv.Value, out var s)) continue;
                 ctx.NodeSprites[kv.Key] = s;
                 if (nineSlice == null) continue;
+                if (preservedAssetPaths.Contains(kv.Value)) continue;
                 if (sliceEvaluated.Contains(kv.Value)) continue;
                 if (!ctx.NodeIndex.TryGetValue(kv.Key, out var node)) continue;
 
@@ -741,6 +772,7 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         private void AllocateAndCopy(
             string sourcePath, string desiredName,
             AssetNameAllocator allocator, HashSet<string> copiedPaths,
+            HashSet<string> preservedAssetPaths,
             out string assetPath)
         {
             assetPath = null;
@@ -764,6 +796,8 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
             var alloc = allocator.Allocate(desiredName, bytes);
             assetPath = alloc.AssetPath;
+            if (alloc.PreserveImporter)
+                preservedAssetPaths.Add(alloc.AssetPath);
             if (!alloc.AlreadyOnDisk)
             {
                 ImageImporter.CopyToAssets(sourcePath, alloc.AssetPath);

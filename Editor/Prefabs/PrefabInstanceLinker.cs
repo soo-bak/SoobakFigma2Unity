@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using SoobakFigma2Unity.Editor.Color;
 using SoobakFigma2Unity.Editor.Models;
 using SoobakFigma2Unity.Editor.Pipeline;
@@ -82,75 +81,26 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             out string prefabPath)
         {
             prefabPath = null;
-            if (ctx.Profile == null || string.IsNullOrWhiteSpace(ctx.Profile.ComponentOutputPath))
-                return false;
-
-            var candidates = new List<string>();
-            if (ctx.Components.TryGetValue(componentId, out var component))
+            var candidates = ComponentPrefabNamer.BuildCandidateNames(
+                componentId, instanceNode.Name, ctx);
+            if (ComponentPrefabNamer.TryResolveReusablePrefab(
+                    candidates, ctx, out prefabPath, out var ambiguousName))
             {
-                if (!string.IsNullOrEmpty(component.ComponentSetId) &&
-                    ctx.ComponentSets.TryGetValue(component.ComponentSetId, out var componentSet))
-                {
-                    AddCandidate(candidates, ComponentPrefabNamer.BuildVariantPrefabName(
-                        componentSet.Name,
-                        component.Name));
-                }
-
-                AddCandidate(candidates, ComponentPrefabNamer.SanitizeFileName(component.Name));
+                _logger.Info($"{instanceNode.Name}: matched existing project prefab '{prefabPath}'");
+                return true;
             }
 
-            AddCandidate(candidates, ComponentPrefabNamer.SanitizeFileName(instanceNode.Name));
-
-            var guids = AssetDatabase.FindAssets(
-                "t:Prefab",
-                new[] { ctx.Profile.ComponentOutputPath });
-
-            // Candidate order matters: the component-set + full property name is more
-            // specific than the raw component name, and both are safer than an instance's
-            // locally overridden layer name.
-            foreach (var candidate in candidates)
+            if (ComponentPrefabNamer.TryResolveManagedPrefab(
+                    componentId, candidates, ctx, out prefabPath))
             {
-                var matches = new List<string>();
-                foreach (var guid in guids)
-                {
-                    var path = AssetDatabase.GUIDToAssetPath(guid);
-                    if (string.Equals(
-                        Path.GetFileNameWithoutExtension(path),
-                        candidate,
-                        StringComparison.OrdinalIgnoreCase))
-                    {
-                        matches.Add(path);
-                    }
-                }
-
-                if (matches.Count == 1)
-                {
-                    prefabPath = matches[0];
-                    _logger.Info($"{instanceNode.Name}: matched prefab by name '{candidate}'");
-                    return true;
-                }
-
-                if (matches.Count > 1)
-                {
-                    _logger.Warn(
-                        $"{instanceNode.Name}: multiple prefabs named '{candidate}' found under " +
-                        $"{ctx.Profile.ComponentOutputPath}; component was not linked.");
-                    return false;
-                }
+                _logger.Info($"{instanceNode.Name}: matched previously generated prefab '{prefabPath}'");
+                return true;
             }
 
+            if (!string.IsNullOrEmpty(ambiguousName))
+                _logger.Warn($"{instanceNode.Name}: multiple project prefabs named " +
+                             $"'{ambiguousName}' found; component was not linked.");
             return false;
-        }
-
-        private static void AddCandidate(List<string> candidates, string candidate)
-        {
-            if (string.IsNullOrWhiteSpace(candidate)) return;
-            foreach (var existing in candidates)
-            {
-                if (string.Equals(existing, candidate, StringComparison.OrdinalIgnoreCase))
-                    return;
-            }
-            candidates.Add(candidate);
         }
 
         /// <summary>

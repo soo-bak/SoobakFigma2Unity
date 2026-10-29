@@ -61,22 +61,10 @@ namespace SoobakFigma2Unity.Editor.Window
 
                 if (page.Children != null)
                 {
-                    foreach (var frame in page.Children)
+                    foreach (var child in page.Children)
                     {
-                        // Show top-level frames, components, component sets
-                        var t = frame.NodeType;
-                        if (t == FigmaNodeType.FRAME || t == FigmaNodeType.COMPONENT ||
-                            t == FigmaNodeType.COMPONENT_SET || t == FigmaNodeType.SECTION)
-                        {
-                            pageItem.Children.Add(new FrameTreeItem
-                            {
-                                NodeId = frame.Id,
-                                Name = frame.Name,
-                                Type = frame.Type,
-                                Selected = false,
-                                Depth = 1
-                            });
-                        }
+                        if (IsSelectableContainer(child))
+                            pageItem.Children.Add(BuildTreeItem(child, 1));
                     }
                 }
 
@@ -149,10 +137,7 @@ namespace SoobakFigma2Unity.Editor.Window
 
             // If page selection changed, propagate to children
             if (item.Selected != wasSelected && item.Children.Count > 0)
-            {
-                foreach (var child in item.Children)
-                    child.Selected = item.Selected;
-            }
+                SetSelectedRecursive(item, item.Selected);
 
             var label = item.Type == "PAGE"
                 ? $"Page: {item.Name}"
@@ -231,14 +216,77 @@ namespace SoobakFigma2Unity.Editor.Window
         {
             var result = new List<string>();
             foreach (var root in _roots)
-            {
-                foreach (var child in root.Children)
-                {
-                    if (child.Selected)
-                        result.Add(child.NodeId);
-                }
-            }
+                CollectSelectedNodeIds(root, result);
             return result;
+        }
+
+        private static FrameTreeItem BuildTreeItem(FigmaNode node, int depth)
+        {
+            var item = new FrameTreeItem
+            {
+                NodeId = node.Id,
+                Name = node.Name,
+                Type = node.Type,
+                Selected = false,
+                Depth = depth
+            };
+
+            // SECTION is an organisational container in Figma. Its direct children are
+            // screen-level import candidates; ordinary FRAME children are UI internals
+            // and should not clutter the frame picker.
+            if (node.NodeType != FigmaNodeType.SECTION || node.Children == null)
+                return item;
+
+            foreach (var child in node.Children)
+            {
+                if (IsSelectableContainer(child))
+                    item.Children.Add(BuildTreeItem(child, depth + 1));
+            }
+
+            return item;
+        }
+
+        private static bool IsSelectableContainer(FigmaNode node)
+        {
+            if (node == null)
+                return false;
+
+            var type = node.NodeType;
+            return type == FigmaNodeType.FRAME
+                   || type == FigmaNodeType.COMPONENT
+                   || type == FigmaNodeType.COMPONENT_SET
+                   || type == FigmaNodeType.SECTION;
+        }
+
+        private static void SetSelectedRecursive(FrameTreeItem item, bool selected)
+        {
+            item.Selected = selected;
+            foreach (var child in item.Children)
+                SetSelectedRecursive(child, selected);
+        }
+
+        private static void CollectSelectedNodeIds(FrameTreeItem item, ICollection<string> result)
+        {
+            bool canImportItem = item.Type != "PAGE" && !string.IsNullOrEmpty(item.NodeId);
+            if (canImportItem && item.Selected && AreAllDescendantsSelected(item))
+            {
+                result.Add(item.NodeId);
+                return;
+            }
+
+            foreach (var child in item.Children)
+                CollectSelectedNodeIds(child, result);
+        }
+
+        private static bool AreAllDescendantsSelected(FrameTreeItem item)
+        {
+            foreach (var child in item.Children)
+            {
+                if (!child.Selected || !AreAllDescendantsSelected(child))
+                    return false;
+            }
+
+            return true;
         }
     }
 }

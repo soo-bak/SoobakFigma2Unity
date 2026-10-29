@@ -39,6 +39,18 @@ namespace SoobakFigma2Unity.Editor.Pipeline
         /// <summary>Generated prefabs (componentId -> prefab path). For Instance linking.</summary>
         public Dictionary<string, string> GeneratedPrefabs { get; set; } = new Dictionary<string, string>();
 
+        /// <summary>Unmanaged project prefabs grouped by exact sanitized filename. These
+        /// are reusable references: matching Figma instances link to them without the
+        /// converter overwriting their contents.</summary>
+        public Dictionary<string, List<string>> ReusablePrefabPathsByName { get; set; } =
+            new Dictionary<string, List<string>>(System.StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Converter-managed prefab paths grouped by their Figma component ID.
+        /// Used only as a fallback for instance linking; unlike unmanaged reusable
+        /// prefabs, these do not suppress normal component re-import.</summary>
+        public Dictionary<string, List<string>> ManagedPrefabPathsByComponentId { get; set; } =
+            new Dictionary<string, List<string>>();
+
         /// <summary>Figma file key (for API calls during import).</summary>
         public string FileKey { get; set; }
 

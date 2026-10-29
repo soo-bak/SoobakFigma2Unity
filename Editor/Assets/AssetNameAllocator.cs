@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using SoobakFigma2Unity.Editor.Util;
+using UnityEditor;
 
 namespace SoobakFigma2Unity.Editor.Assets
 {
@@ -29,8 +31,10 @@ namespace SoobakFigma2Unity.Editor.Assets
         private readonly string _assetDir;
         private readonly Dictionary<string, string> _hashToPath = new();
         private readonly Dictionary<string, string> _nameToPath = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _reusableNameToPath = new(StringComparer.OrdinalIgnoreCase);
 
         public int DeduplicatedCount { get; private set; }
+        public int ReusedProjectAssetCount { get; private set; }
         public int AllocatedCount { get; private set; }
 
         public AssetNameAllocator(string assetDir)
@@ -66,28 +70,87 @@ namespace SoobakFigma2Unity.Editor.Assets
         }
 
         /// <summary>
+        /// Index existing Sprite assets outside the generated-image output folder so a
+        /// Figma layer named <c>ic_close</c>, <c>img_portrait</c>, or
+        /// <c>slice_panel</c> can use the project's existing artwork instead of creating
+        /// another PNG. Assets inside a UITexture folder win when duplicate names exist;
+        /// all other ties are resolved by the shortest, then ordinal, asset path so the
+        /// result stays deterministic across machines.
+        /// </summary>
+        public void PreloadReusableProjectSprites(IEnumerable<string> desiredBaseNames)
+        {
+            var desiredNames = new HashSet<string>(
+                desiredBaseNames.Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Select(name => FileNameSanitizer.Sanitize(name)),
+                StringComparer.OrdinalIgnoreCase);
+            if (desiredNames.Count == 0)
+                return;
+
+            var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var guid in AssetDatabase.FindAssets("t:Sprite", new[] { "Assets" }))
+            {
+                var assetPath = AssetDatabase.GUIDToAssetPath(guid)?.Replace("\\", "/");
+                if (string.IsNullOrEmpty(assetPath) || IsInOutputDirectory(assetPath))
+                    continue;
+
+                var name = FileNameSanitizer.Sanitize(Path.GetFileNameWithoutExtension(assetPath));
+                if (!desiredNames.Contains(name))
+                    continue;
+
+                // FindAssets can return texture assets that do not expose a Sprite as
+                // their main representation. Only index paths the converter can assign
+                // directly to a UnityEngine.UI.Image.
+                if (AssetDatabase.LoadAssetAtPath<UnityEngine.Sprite>(assetPath) == null)
+                    continue;
+
+                candidates.Add(assetPath);
+            }
+
+            foreach (var assetPath in candidates.OrderBy(GetReusableAssetPriority)
+                         .ThenBy(p => p.Length)
+                         .ThenBy(p => p, StringComparer.OrdinalIgnoreCase))
+            {
+                var name = FileNameSanitizer.Sanitize(Path.GetFileNameWithoutExtension(assetPath));
+                if (!string.IsNullOrEmpty(name))
+                    _reusableNameToPath.TryAdd(name, assetPath);
+            }
+        }
+
+        /// <summary>
         /// Resolve the asset path for a downloaded PNG.
-        /// Returns the asset path (always under <c>_assetDir</c>) plus a flag telling the
-        /// caller whether the file at that path already matches and the copy can be skipped.
+        /// Returns either a reusable project Sprite path or a path under
+        /// <c>_assetDir</c>, plus flags telling the caller whether copying and importer
+        /// configuration can be skipped.
         /// </summary>
         public AllocationResult Allocate(string desiredBaseName, byte[] bytes, string ext = ".png")
         {
             if (bytes == null || bytes.Length == 0)
                 throw new ArgumentException("bytes must be non-empty", nameof(bytes));
 
+            var sanitized = FileNameSanitizer.Sanitize(desiredBaseName);
             var hash = HashBytes(bytes);
+
+            // A matching project Sprite is an intentional asset reference, not an
+            // export collision. Prefer it even when a previous converter run left a
+            // byte-identical copy in the output folder.
+            if (_reusableNameToPath.TryGetValue(sanitized, out var reusable))
+            {
+                ReusedProjectAssetCount++;
+                return new AllocationResult(reusable, hash, alreadyOnDisk: true,
+                    preserveImporter: true);
+            }
 
             // Same content already placed (either preloaded or from this run) — reuse.
             if (_hashToPath.TryGetValue(hash, out var existing))
             {
                 DeduplicatedCount++;
-                return new AllocationResult(existing, hash, alreadyOnDisk: true);
+                return new AllocationResult(existing, hash, alreadyOnDisk: true,
+                    preserveImporter: false);
             }
 
             // Hash didn't match anything → this is genuinely new content. Find an
             // unused name slot. The early hash check above means any existing name
             // collision is guaranteed to be different content, so we always bump.
-            var sanitized = FileNameSanitizer.Sanitize(desiredBaseName);
             var candidate = sanitized;
             int counter = 2;
             while (_nameToPath.ContainsKey(candidate))
@@ -102,7 +165,20 @@ namespace SoobakFigma2Unity.Editor.Assets
             _hashToPath[hash] = assetPath;
             _nameToPath[candidate] = assetPath;
             AllocatedCount++;
-            return new AllocationResult(assetPath, hash, alreadyOnDisk: false);
+            return new AllocationResult(assetPath, hash, alreadyOnDisk: false,
+                preserveImporter: false);
+        }
+
+        private bool IsInOutputDirectory(string assetPath)
+        {
+            var prefix = _assetDir.TrimEnd('/') + "/";
+            return assetPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static int GetReusableAssetPriority(string assetPath)
+        {
+            var normalized = "/" + assetPath.Replace("\\", "/").Trim('/') + "/";
+            return normalized.IndexOf("/UITexture/", StringComparison.OrdinalIgnoreCase) >= 0 ? 0 : 1;
         }
 
         private static string HashBytes(byte[] bytes)
@@ -137,15 +213,23 @@ namespace SoobakFigma2Unity.Editor.Assets
         {
             public readonly string AssetPath;
             public readonly string ContentHash;
-            /// <summary>True when the resolved path already holds a file with the same
-            /// hash — caller can skip the copy step.</summary>
+            /// <summary>True when the resolved path already holds a usable asset and the
+            /// caller can skip the copy step.</summary>
             public readonly bool AlreadyOnDisk;
+            /// <summary>True when this path belongs to an existing project Sprite whose
+            /// importer settings and 9-slice border must be left untouched.</summary>
+            public readonly bool PreserveImporter;
 
-            public AllocationResult(string assetPath, string contentHash, bool alreadyOnDisk)
+            public AllocationResult(
+                string assetPath,
+                string contentHash,
+                bool alreadyOnDisk,
+                bool preserveImporter)
             {
                 AssetPath = assetPath;
                 ContentHash = contentHash;
                 AlreadyOnDisk = alreadyOnDisk;
+                PreserveImporter = preserveImporter;
             }
         }
     }

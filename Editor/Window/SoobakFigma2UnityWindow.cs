@@ -7,6 +7,7 @@ using SoobakFigma2Unity.Editor.Pipeline;
 using SoobakFigma2Unity.Editor.Settings;
 using SoobakFigma2Unity.Editor.Util;
 using SoobakFigma2Unity.Runtime;
+using TMPro;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -54,6 +55,8 @@ namespace SoobakFigma2Unity.Editor.Window
             _profile.ScreenOutputPath = SoobakSettings.ScreenPath;
             _profile.ImageOutputPath = SoobakSettings.ImagePath;
             _profile.ImageScale = SoobakSettings.ImageScale;
+            _profile.ImportBoldFromFigma = SoobakSettings.ImportBoldFromFigma;
+            LoadFontAssets();
             _scaleIndex = System.Array.IndexOf(ScaleValues, _profile.ImageScale);
             if (_scaleIndex < 0) _scaleIndex = 1;
             _logger.OnLogUpdated += Repaint;
@@ -87,6 +90,7 @@ namespace SoobakFigma2Unity.Editor.Window
             {
                 EditorGUI.indentLevel++;
                 DrawImageSection();
+                DrawTextSection();
                 DrawOutputSection();
                 DrawLayoutSection();
                 DrawColorSection();
@@ -148,6 +152,103 @@ namespace SoobakFigma2Unity.Editor.Window
                 new GUIContent("Solid color → no image"), _profile.SolidColorOptimization);
             EditorGUI.indentLevel--;
             EditorGUILayout.Space(8);
+        }
+
+        private void DrawTextSection()
+        {
+            EditorGUILayout.LabelField("Text", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+            EditorGUI.BeginChangeCheck();
+            _profile.ImportBoldFromFigma = EditorGUILayout.Toggle(
+                new GUIContent(
+                    "Import Bold from Figma",
+                    "Apply TMP Bold when Figma font weight is 700 or higher. Off by default."),
+                _profile.ImportBoldFromFigma);
+            if (EditorGUI.EndChangeCheck())
+                SoobakSettings.ImportBoldFromFigma = _profile.ImportBoldFromFigma;
+
+            EditorGUILayout.HelpBox(
+                "The first font is the default. Figma font names are matched to the closest candidate automatically.",
+                MessageType.Info);
+
+            var removeIndex = -1;
+            for (var i = 0; i < _profile.FontAssets.Count; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                var label = i == 0 ? "Default" : $"Candidate {i + 1}";
+                EditorGUI.BeginChangeCheck();
+                _profile.FontAssets[i] = (TMP_FontAsset)EditorGUILayout.ObjectField(
+                    label, _profile.FontAssets[i], typeof(TMP_FontAsset), false);
+                if (EditorGUI.EndChangeCheck())
+                    SaveFontAssets();
+
+                using (new EditorGUI.DisabledScope(i == 0))
+                    if (GUILayout.Button("↑", GUILayout.Width(24)))
+                    {
+                        (_profile.FontAssets[i - 1], _profile.FontAssets[i]) =
+                            (_profile.FontAssets[i], _profile.FontAssets[i - 1]);
+                        SaveFontAssets();
+                    }
+
+                if (GUILayout.Button("×", GUILayout.Width(24)))
+                    removeIndex = i;
+                EditorGUILayout.EndHorizontal();
+            }
+
+            if (removeIndex >= 0)
+            {
+                _profile.FontAssets.RemoveAt(removeIndex);
+                SaveFontAssets();
+            }
+
+            if (GUILayout.Button("+ Add Font Candidate"))
+            {
+                _profile.FontAssets.Add(null);
+                SaveFontAssets();
+            }
+
+            if (_profile.FontAssets.Count == 0)
+                EditorGUILayout.HelpBox("TMP Settings default font will be used.", MessageType.Warning);
+
+            EditorGUI.indentLevel--;
+            EditorGUILayout.Space(8);
+        }
+
+        private void LoadFontAssets()
+        {
+            _profile.FontAssets.Clear();
+            var guids = SoobakSettings.FontAssetGuids.Split(
+                new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var guid in guids)
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                var font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(path);
+                if (font != null)
+                    _profile.FontAssets.Add(font);
+            }
+
+            if (_profile.FontAssets.Count > 0 || TMP_Settings.defaultFontAsset == null)
+                return;
+
+            _profile.FontAssets.Add(TMP_Settings.defaultFontAsset);
+            SaveFontAssets();
+        }
+
+        private void SaveFontAssets()
+        {
+            var guids = new List<string>();
+            foreach (var font in _profile.FontAssets)
+            {
+                if (font == null)
+                    continue;
+
+                var path = AssetDatabase.GetAssetPath(font);
+                var guid = AssetDatabase.AssetPathToGUID(path);
+                if (!string.IsNullOrEmpty(guid))
+                    guids.Add(guid);
+            }
+
+            SoobakSettings.FontAssetGuids = string.Join(";", guids);
         }
 
         // ─── Layout ─────────────────────────────────────
@@ -349,7 +450,9 @@ namespace SoobakFigma2Unity.Editor.Window
             AsyncHelper.RunAsync(async () =>
             {
                 using var api = new FigmaApiClient(_token);
-                var file = await api.GetFileAsync(urlInfo.FileKey, depth: 2);
+                // Depth 3 includes frames nested directly under a Figma SECTION:
+                // DOCUMENT → CANVAS → SECTION → FRAME.
+                var file = await api.GetFileAsync(urlInfo.FileKey, depth: 3);
                 AsyncHelper.RunOnMainThread(() =>
                 {
                     _treeView.BuildFromDocument(file.Document);
@@ -392,6 +495,11 @@ namespace SoobakFigma2Unity.Editor.Window
                     RefreshImportedPrefabLinks();
                     _isImporting = false;
                     Repaint();
+                    var prefabToOpen = pipeline.PrimaryPrefabPath;
+                    if (string.IsNullOrEmpty(prefabToOpen) && pipeline.SavedPrefabPaths.Count > 0)
+                        prefabToOpen = pipeline.SavedPrefabPaths[0];
+                    if (!string.IsNullOrEmpty(prefabToOpen))
+                        OpenImportedPrefab(prefabToOpen);
                 });
             }, e => { _logger.Error($"Import failed: {e.Message}"); _isImporting = false; Repaint(); });
         }

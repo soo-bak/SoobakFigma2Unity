@@ -49,7 +49,10 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             string outputDir,
             ImportContext ctx)
         {
+            // Only paths actually written this run are returned to the caller (for Undo).
+            // allPaths also includes designer-owned prefabs that were reused untouched.
             var result = new Dictionary<string, string>();
+            var allPaths = new Dictionary<string, string>();
 
             if (componentSetNode.Children == null || componentSetNode.Children.Count == 0)
                 return result;
@@ -79,6 +82,14 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             for (int i = 0; i < parsedVariants.Count; i++)
             {
                 var variant = parsedVariants[i];
+
+                if (ctx.GeneratedPrefabs.TryGetValue(variant.ComponentId, out var reusablePath))
+                {
+                    allPaths[variant.ComponentId] = reusablePath;
+                    _logger.Info($"Variant reused existing prefab: {reusablePath}");
+                    continue;
+                }
+
                 var variantGo = convertFunc(variant.Node);
 
                 // Every variant includes its property values in the filename. The first
@@ -96,6 +107,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
 
                 PrefabUtility.SaveAsPrefabAsset(variantGo, variantPath);
                 result[variant.ComponentId] = variantPath;
+                allPaths[variant.ComponentId] = variantPath;
                 ctx.GeneratedPrefabs[variant.ComponentId] = variantPath;
                 _logger.Success($"{(i == 0 ? "Base" : "Variant")} prefab: {variantPath}");
 
@@ -105,7 +117,14 @@ namespace SoobakFigma2Unity.Editor.Prefabs
             // Apply Selectable state mapping on the base prefab (if it's a Button-like
             // component set with State=Default/Hover/Pressed/Disabled variants). Loaded
             // back from disk because the live baseGo was destroyed above.
-            var basePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(result[baseVariant.ComponentId]);
+            var baseWasWritten = result.ContainsKey(baseVariant.ComponentId);
+            var basePath = baseWasWritten && allPaths.TryGetValue(
+                baseVariant.ComponentId, out var writtenBasePath)
+                ? writtenBasePath
+                : null;
+            var basePrefab = !string.IsNullOrEmpty(basePath)
+                ? AssetDatabase.LoadAssetAtPath<GameObject>(basePath)
+                : null;
             if (basePrefab != null)
             {
                 var variantNodeMap = variants.ToDictionary(v => v.Id, v => v);
@@ -114,7 +133,7 @@ namespace SoobakFigma2Unity.Editor.Prefabs
                 {
                     var stateMapper = new SelectableStateMapper(_logger);
                     if (stateMapper.TryApplyStates(baseInstance, componentSetNode, variantNodeMap, ctx))
-                        PrefabUtility.SaveAsPrefabAsset(baseInstance, result[baseVariant.ComponentId]);
+                        PrefabUtility.SaveAsPrefabAsset(baseInstance, basePath);
                 }
                 finally
                 {

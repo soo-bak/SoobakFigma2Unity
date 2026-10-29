@@ -47,6 +47,26 @@ namespace SoobakFigma2Unity.Editor.Pipeline
 
             AssetFolderUtil.EnsureFolder(profile.ComponentOutputPath);
 
+            // Exact-name project prefabs are treated as designer-owned references. Link
+            // instances to them and skip extraction so import never overwrites the asset.
+            foreach (var componentId in inv.AllComponentIds)
+            {
+                inv.ComponentNames.TryGetValue(componentId, out var displayName);
+                var candidates = ComponentPrefabNamer.BuildCandidateNames(
+                    componentId, displayName, ctx);
+                if (ComponentPrefabNamer.TryResolveReusablePrefab(
+                        candidates, ctx, out var reusablePath, out var ambiguousName))
+                {
+                    ctx.GeneratedPrefabs[componentId] = reusablePath;
+                    logger?.Info($"{displayName}: reused existing prefab '{reusablePath}'");
+                }
+                else if (!string.IsNullOrEmpty(ambiguousName))
+                {
+                    logger?.Warn($"{displayName}: multiple project prefabs named " +
+                                 $"'{ambiguousName}' found; generating the component instead.");
+                }
+            }
+
             // 1) COMPONENT_SETs first — let PrefabVariantBuilder own variant chains.
             //    It writes each variant's path into ctx.GeneratedPrefabs, so the
             //    standalone loop below sees them as already-handled and skips them.
@@ -96,7 +116,8 @@ namespace SoobakFigma2Unity.Editor.Pipeline
                 inv.ComponentNames.TryGetValue(componentId, out var displayName);
                 if (string.IsNullOrEmpty(displayName)) displayName = master.Name;
 
-                var assetPath = ComponentPrefabNamer.Resolve(componentId, displayName, profile.ComponentOutputPath);
+                var assetPath = ComponentPrefabNamer.Resolve(
+                    componentId, displayName, profile.ComponentOutputPath);
 
                 var go = convertFunc(master);
                 try

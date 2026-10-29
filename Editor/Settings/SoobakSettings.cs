@@ -13,6 +13,8 @@ namespace SoobakFigma2Unity.Editor.Settings
         private const string ScreenPathKey = "SoobakFigma2Unity_ScreenPath";
         private const string ImagePathKey = "SoobakFigma2Unity_ImagePath";
         private const string ImageScaleKey = "SoobakFigma2Unity_ImageScale";
+        private const string FontAssetGuidsKey = "SoobakFigma2Unity_FontAssetGuids";
+        private const string ImportBoldFromFigmaKey = "SoobakFigma2Unity_ImportBoldFromFigma";
 
         public static string Token
         {
@@ -42,6 +44,18 @@ namespace SoobakFigma2Unity.Editor.Settings
         {
             get => EditorPrefs.GetFloat(ImageScaleKey, 2f);
             set => EditorPrefs.SetFloat(ImageScaleKey, value);
+        }
+
+        public static string FontAssetGuids
+        {
+            get => EditorPrefs.GetString(FontAssetGuidsKey, "");
+            set => EditorPrefs.SetString(FontAssetGuidsKey, value ?? "");
+        }
+
+        public static bool ImportBoldFromFigma
+        {
+            get => EditorPrefs.GetBool(ImportBoldFromFigmaKey, false);
+            set => EditorPrefs.SetBool(ImportBoldFromFigmaKey, value);
         }
     }
 }
